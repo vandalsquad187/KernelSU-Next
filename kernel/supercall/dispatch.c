@@ -1,27 +1,12 @@
-#include <linux/capability.h>
-#include <linux/cred.h>
-#include <linux/slab.h>
-#include <linux/string.h>
-#include <linux/uaccess.h>
-#include <linux/version.h>
-#include <linux/thread_info.h>
-#include "uapi/supercall.h"
-#include "supercall/internal.h"
-#include "arch.h" // IWYU pragma: keep
-#include "policy/allowlist.h"
-#include "policy/feature.h"
-#include "klog.h" // IWYU pragma: keep
-#include "ksu.h"
-#include "runtime/ksud_boot.h"
-#include "feature/kernel_umount.h"
-#include "manager/manager_identity.h"
-#include "selinux/selinux.h"
-#include "infra/file_wrapper.h"
-#include "hook/tp_marker.h"
-#include "policy/app_profile.h"
-#include "sulog/event.h"
-#include "sulog/fd.h"
-#include "supercall/supercall.h"
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/namei.h>
+#include <linux/susfs.h>
+#include "objsec.h"
+#endif // #ifdef CONFIG_KSU_SUSFS
+
+#ifdef CONFIG_KSU_SUSFS
+bool susfs_is_boot_completed_triggered __read_mostly = false;
+#endif // #ifdef CONFIG_KSU_SUSFS
 
 static int do_grant_root(void __user *arg)
 {
@@ -111,41 +96,37 @@ static int do_report_event(void __user *arg)
         return -EFAULT;
     }
 
-    switch (cmd.event) {
-    case EVENT_POST_FS_DATA: {
-        static bool post_fs_data_lock = false;
-        if (!post_fs_data_lock) {
-            post_fs_data_lock = true;
-            if (ksu_late_loaded) {
-                pr_info("post-fs-data skipped (late load)\n");
-            } else {
-                pr_info("post-fs-data triggered\n");
-                on_post_fs_data();
-            }
-        }
-        break;
-    }
-    case EVENT_BOOT_COMPLETED: {
-        static bool boot_complete_lock = false;
-        if (!boot_complete_lock) {
-            boot_complete_lock = true;
-            if (ksu_late_loaded) {
-                pr_info("boot_complete skipped (late load)\n");
-            } else {
-                pr_info("boot_complete triggered\n");
-                on_boot_completed();
-            }
-        }
-        break;
-    }
-    case EVENT_MODULE_MOUNTED: {
-        pr_info("module mounted!\n");
-        on_module_mounted();
-        break;
-    }
-    default:
-        break;
-    }
+	switch (cmd.event) {
+	case EVENT_POST_FS_DATA: {
+		static bool post_fs_data_lock = false;
+		if (!post_fs_data_lock) {
+			post_fs_data_lock = true;
+			pr_info("post-fs-data triggered\n");
+			on_post_fs_data();
+		}
+		break;
+	}
+	case EVENT_BOOT_COMPLETED: {
+		static bool boot_complete_lock = false;
+		if (!boot_complete_lock) {
+			boot_complete_lock = true;
+			pr_info("boot_complete triggered\n");
+			on_boot_completed();
+#ifdef CONFIG_KSU_SUSFS
+        	susfs_start_sdcard_monitor_fn();
+#endif // #ifdef CONFIG_KSU_SUSFS
+		}
+		break;
+	}
+	case EVENT_MODULE_MOUNTED: {
+		ksu_module_mounted = true;
+		pr_info("module mounted!\n");
+		on_module_mounted();
+		break;
+	}
+	default:
+		break;
+	}
 
     return 0;
 }
@@ -455,55 +436,39 @@ static int do_manage_mark(void __user *arg)
         return -EFAULT;
     }
 
-    switch (cmd.operation) {
-    case KSU_MARK_GET: {
-        // Get task mark status
-        ret = ksu_get_task_mark(cmd.pid);
-        if (ret < 0) {
-            pr_err("manage_mark: get failed for pid %d: %d\n", cmd.pid, ret);
-            return ret;
+	switch (cmd.operation) {
+		case KSU_MARK_GET: {
+#ifndef CONFIG_KSU_SUSFS
+			// on this one, we return seccomp status of a pid instead
+			// at the very least we have partial featureset
+			ret = ksu_get_task_mark(cmd.pid);
+			if (ret < 0) {
+			    pr_err("manage_mark: get failed for pid %d: %d\n", cmd.pid, ret);
+			    return ret;
+			}
+			cmd.result = (u32)ret;
+			break;
+#else
+if (susfs_is_current_proc_umounted()) {
+            ret = 0; // SYSCALL_TRACEPOINT is NOT flagged
+        } else {
+            ret = 1; // SYSCALL_TRACEPOINT is flagged
         }
+        pr_info("manage_mark: ret for pid %d: %d\n", cmd.pid, ret);
         cmd.result = (u32)ret;
         break;
-    }
-    case KSU_MARK_MARK: {
-        if (cmd.pid == 0) {
-            ksu_mark_all_process();
-        } else {
-            ret = ksu_set_task_mark(cmd.pid, true);
-            if (ret < 0) {
-                pr_err("manage_mark: set_mark failed for pid %d: %d\n", cmd.pid, ret);
-                return ret;
-            }
-        }
-        break;
-    }
-    case KSU_MARK_UNMARK: {
-        if (cmd.pid == 0) {
-            ksu_unmark_all_process();
-        } else {
-            ret = ksu_set_task_mark(cmd.pid, false);
-            if (ret < 0) {
-                pr_err("manage_mark: set_unmark failed for pid %d: %d\n", cmd.pid, ret);
-                return ret;
-            }
-        }
-        break;
-    }
-    case KSU_MARK_REFRESH: {
-        ksu_mark_running_process();
-        pr_info("manage_mark: refreshed running processes\n");
-        break;
-    }
-    default: {
-        pr_err("manage_mark: invalid operation %u\n", cmd.operation);
-        return -EINVAL;
-    }
-    }
-    if (copy_to_user(arg, &cmd, sizeof(cmd))) {
-        pr_err("manage_mark: copy_to_user failed\n");
-        return -EFAULT;
-    }
+#endif // #ifndef CONFIG_KSU_SUSFS
+		}
+#if 0 // TODO: revisit this sometime
+		case KSU_MARK_MARK: { break; }
+		case KSU_MARK_UNMARK: { break; }
+		case KSU_MARK_REFRESH: { break; }
+#endif
+		default: {
+			pr_err("manage_mark: invalid operation %u\n", cmd.operation);
+			return -EINVAL;
+		}
+	}
 
     return 0;
 }

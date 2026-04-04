@@ -168,7 +168,69 @@ void apply_kernelsu_rules()
 
     reset_avc_cache();
 out_unlock:
-    mutex_unlock(&selinux_state.policy_mutex);
+	mutex_unlock(&selinux_state.policy_mutex);
+#else
+
+	cpumask_t old_mask;
+	db = get_policydb();
+
+	rwlock_t *lock = ksu_get_policy_rwlock();
+	if (!lock)
+		goto do_stop_machine;
+
+	/*
+	 * HACK: write_lock() is held with preempt enabled. DO NOT let the
+	 * task be migrated to any other CPU than the current CPU. And since
+	 * set_cpus_allowed_ptr() can sleep, use raw_smp_processor_id() to get
+	 * current CPU and bypass preemption checks.
+	 */
+	cpumask_copy(&old_mask, ksu_get_current_cpumask_t());
+	set_cpus_allowed_ptr(current, cpumask_of(raw_smp_processor_id()));
+
+	pr_info("%s: type: policy_rwlock \n", __func__);
+	write_lock(lock);
+	preempt_enable();
+
+	// we do this dance since both kernel and userspace can trigger this
+	if (likely(current && current->mm))
+		goto has_current_mm;
+
+	apply_kernelsu_rules_fn((void *)db);
+	goto out_unlock;
+
+has_current_mm:
+	;
+	// HACK: raise priority of this to the heavens
+	int old_policy = current->policy;
+	struct sched_param old_param = { .sched_priority = current->rt_priority };
+	struct sched_param new_param = { .sched_priority = 50 };
+
+	sched_setscheduler_nocheck(current, 1, &new_param); // raise, fifo, 50
+	apply_kernelsu_rules_fn((void *)db);
+	sched_setscheduler_nocheck(current, old_policy, &old_param); // restore
+
+out_unlock:
+	preempt_disable();
+	write_unlock(lock);
+	set_cpus_allowed_ptr(current, &old_mask);
+	goto out_flush;
+
+do_stop_machine:
+	pr_info("%s: type: stop_machine()\n", __func__);
+	stop_machine(apply_kernelsu_rules_fn, (void *)db, NULL);
+
+out_flush:
+	smp_mb();
+	reset_avc_cache();
+#endif
+#ifdef CONFIG_KSU_SUSFS
+    // Allow umount in zygote process without installing zygisk
+    ksu_allow(db, "zygote", "labeledfs", "filesystem", "unmount");
+    susfs_set_priv_app_sid();
+    susfs_set_init_sid();
+    susfs_set_ksu_sid();
+    susfs_set_zygote_sid();
+#endif // #ifdef CONFIG_KSU_SUSFS
 }
 
 #define KSU_SEPOLICY_MAX_BATCH_SIZE (8U * 1024U * 1024U)
