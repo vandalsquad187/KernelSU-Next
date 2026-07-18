@@ -159,33 +159,108 @@ out_release_env_p:
     return ret;
 }
 
-static long do_ksu_adb_root_handle_execve(struct pt_regs *regs)
+static noinline void do_ksu_adb_root_handle_execve(void *filename, void *envp_in)
 {
-    if (likely(is_exec_adbd(regs) != 1)) {
-        return 0;
-    }
+	if (likely(test_thread_flag(TIF_SECCOMP)))
+		return;
 
-    if (unlikely(is_libadbroot_ok() != 1)) {
-        return 0;
-    }
+	uid_t uid = current_euid().val;
+	if (uid != 0 && uid != 2000)
+        	return;
 
-    long ret = setup_ld_preload(regs);
-    if (ret) {
-        return ret;
-    }
+	// filename is void * char __user *
+	const char __user **filename_user = (const char __user **)filename;
 
-    pr_info("escape to root for adb\n");
-    escape_to_root_for_adb_root();
-    return 0;
+	if (likely(!is_exec_adbd(filename_user)))
+		return;
+
+	if (unlikely(!is_libadbroot_ok()))
+		return;
+
+	if (setup_ld_preload((void ***)envp_in))
+		return;
+
+	pr_info("escape to root for adb\n");
+	escape_to_root_for_adb_root();
+	escape_with_root_profile(); // why is this needed for 3.x?
+	return;
 }
 
-long ksu_adb_root_handle_execve(struct pt_regs *regs)
+static noinline void do_ksu_adb_root_handle_execveat(void *filename, void *envp_in)
 {
-    if (static_branch_unlikely(&ksu_adb_root)) {
-        return do_ksu_adb_root_handle_execve(regs);
-    }
-    return 0;
+	if (likely(test_thread_flag(TIF_SECCOMP)))
+		return;
+
+	uid_t uid = current_euid().val;
+	if (uid != 0 && uid != 2000)
+        	return;
+
+	if (!filename)
+		return;
+
+	// filename is char **
+	if (!*(void **)filename)
+		return;
+
+	if (!!endswith(*(char **)filename, "/adbd"))
+		return;
+
+	if (unlikely(!is_libadbroot_ok()))
+		return;
+
+	if (!envp_in)
+		return;
+
+	struct user_arg_ptr *envp = (struct user_arg_ptr *)envp_in;
+
+	void ***envp_addr = (void ***)&envp->ptr.native;
+#ifdef CONFIG_COMPAT
+	if (unlikely(envp->is_compat))
+		envp_addr = (void ***)&envp->ptr.compat;
+#endif
+
+	pr_info("%s: envp 0x%lx \n", __func__, (uintptr_t)*envp_addr );
+
+	if (setup_ld_preload(envp_addr))
+		return; 
+
+	pr_info("escape to root for adb\n");
+	escape_to_root_for_adb_root();
+	escape_with_root_profile(); // why is this needed?
+	return;
 }
+
+#ifdef KSU_CAN_USE_JUMP_LABEL // see kernel_compat.h
+
+DEFINE_STATIC_KEY_FALSE(ksu_adb_root_key);
+
+static inline void ksu_adb_root_handle_execve(void *filename, void *envp_in)
+{
+	if (static_branch_unlikely(&ksu_adb_root_key))
+		do_ksu_adb_root_handle_execve(filename, envp_in);
+}
+static inline void ksu_adb_root_handle_execveat(void *filename, void *envp_in)
+{
+	if (static_branch_unlikely(&ksu_adb_root_key))
+		do_ksu_adb_root_handle_execveat(filename, envp_in);
+}
+
+static inline void ksu_static_branch_enable() { static_branch_enable(&ksu_adb_root_key); smp_mb(); }
+static inline void ksu_static_branch_disable() { static_branch_disable(&ksu_adb_root_key); smp_mb(); }
+#else /* ! KSU_CAN_USE_JUMP_LABEL */
+static inline void ksu_adb_root_handle_execve(void *filename, void *envp_in)
+{
+	if (unlikely(ksu_adb_root))
+		do_ksu_adb_root_handle_execve(filename, envp_in);
+}
+static inline void ksu_adb_root_handle_execveat(void *filename, void *envp_in)
+{
+	if (unlikely(ksu_adb_root))
+		do_ksu_adb_root_handle_execveat(filename, envp_in);
+}
+static inline void ksu_static_branch_enable() { } // no-op
+static inline void ksu_static_branch_disable() { } // no-op
+#endif // KSU_CAN_USE_JUMP_LABEL
 
 static int kernel_adb_root_feature_get(u64 *value)
 {
@@ -195,14 +270,22 @@ static int kernel_adb_root_feature_get(u64 *value)
 
 static int kernel_adb_root_feature_set(u64 value)
 {
-    bool enable = value != 0;
-    if (enable) {
-        static_key_enable(&ksu_adb_root.key);
-    } else {
-        static_key_disable(&ksu_adb_root.key);
-    }
-    pr_info("adb_root: set to %d\n", enable);
-    return 0;
+	bool enable = value != 0;
+
+	// prevent double enable / double disable
+	// as old api does ref inc / dec, its a 'lil risky
+	if (enable == ksu_adb_root)
+		return 0;
+
+	if (enable) {
+		ksu_adb_root = true;
+		ksu_static_branch_enable();
+	} else {
+		ksu_adb_root = false;
+		ksu_static_branch_disable();
+	}
+	pr_info("adb_root: set to %d\n", enable);
+	return 0;
 }
 
 static const struct ksu_feature_handler ksu_adb_root_handler = {

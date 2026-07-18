@@ -1,28 +1,3 @@
-#include <linux/capability.h>
-#include <linux/cred.h>
-#include <linux/slab.h>
-#include <linux/string.h>
-#include <linux/uaccess.h>
-#include <linux/version.h>
-#include <linux/thread_info.h>
-#include "uapi/supercall.h"
-#include "supercall/internal.h"
-#include "arch.h" // IWYU pragma: keep
-#include "policy/allowlist.h"
-#include "policy/feature.h"
-#include "klog.h" // IWYU pragma: keep
-#include "ksu.h"
-#include "runtime/ksud_boot.h"
-#include "feature/kernel_umount.h"
-#include "manager/manager_identity.h"
-#include "selinux/selinux.h"
-#include "infra/file_wrapper.h"
-#include "hook/tp_marker.h"
-#include "policy/app_profile.h"
-#include "sulog/event.h"
-#include "sulog/fd.h"
-#include "supercall/supercall.h"
-
 static int do_grant_root(void __user *arg)
 {
     int ret;
@@ -41,11 +16,14 @@ static int do_grant_root(void __user *arg)
 
 static int do_get_info(void __user *arg)
 {
-    struct ksu_get_info_cmd cmd = { .version = KERNEL_SU_VERSION, .flags = 0 };
+	struct ksu_get_info_cmd cmd = { .version = KERNEL_SU_VERSION, .flags = 0 };
 
-#ifdef MODULE
-    cmd.flags |= KSU_GET_INFO_FLAG_LKM;
-#endif
+	// NOTE: we do not have LKM support so we don't bother with its flags or late-load
+	if (is_manager()) {
+		cmd.flags |= KSU_GET_INFO_FLAG_MANAGER;
+	}
+	cmd.features = KSU_FEATURE_MAX;
+	cmd.uapi_version = KERNEL_SU_UAPI_VERSION;
 
     if (ksuver_override)
         cmd.version = ksuver_override;
@@ -97,6 +75,24 @@ static int do_get_info_legacy(void __user *arg)
     return 0;
 }
 
+static int do_get_info_legacy(void __user *arg)
+{
+	struct ksu_get_info_legacy_cmd cmd = { .version = KERNEL_SU_VERSION, .flags = 0 };
+
+	// NOTE: we do not have LKM support so we don't bother with its flags or late-load
+	if (is_manager()) {
+		cmd.flags |= KSU_GET_INFO_FLAG_MANAGER;
+	}
+	cmd.features = KSU_FEATURE_MAX;
+
+	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
+		pr_err("get_version: copy_to_user failed\n");
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
 static int do_report_event(void __user *arg)
 {
     struct ksu_report_event_cmd cmd;
@@ -105,41 +101,34 @@ static int do_report_event(void __user *arg)
         return -EFAULT;
     }
 
-    switch (cmd.event) {
-    case EVENT_POST_FS_DATA: {
-        static bool post_fs_data_lock = false;
-        if (!post_fs_data_lock) {
-            post_fs_data_lock = true;
-            if (ksu_late_loaded) {
-                pr_info("post-fs-data skipped (late load)\n");
-            } else {
-                pr_info("post-fs-data triggered\n");
-                on_post_fs_data();
-            }
-        }
-        break;
-    }
-    case EVENT_BOOT_COMPLETED: {
-        static bool boot_complete_lock = false;
-        if (!boot_complete_lock) {
-            boot_complete_lock = true;
-            if (ksu_late_loaded) {
-                pr_info("boot_complete skipped (late load)\n");
-            } else {
-                pr_info("boot_complete triggered\n");
-                on_boot_completed();
-            }
-        }
-        break;
-    }
-    case EVENT_MODULE_MOUNTED: {
-        pr_info("module mounted!\n");
-        on_module_mounted();
-        break;
-    }
-    default:
-        break;
-    }
+	switch (cmd.event) {
+	case EVENT_POST_FS_DATA: {
+		static bool post_fs_data_lock = false;
+		if (!post_fs_data_lock) {
+			post_fs_data_lock = true;
+			pr_info("post-fs-data triggered\n");
+			on_post_fs_data();
+		}
+		break;
+	}
+	case EVENT_BOOT_COMPLETED: {
+		static bool boot_complete_lock = false;
+		if (!boot_complete_lock) {
+			boot_complete_lock = true;
+			pr_info("boot_complete triggered\n");
+			on_boot_completed();
+		}
+		break;
+	}
+	case EVENT_MODULE_MOUNTED: {
+		ksu_module_mounted = true;
+		pr_info("module mounted!\n");
+		on_module_mounted();
+		break;
+	}
+	default:
+		break;
+	}
 
     return 0;
 }
@@ -327,33 +316,28 @@ static int do_get_manager_appid(void __user *arg)
 
 static int do_get_app_profile(void __user *arg)
 {
-#ifdef CONFIG_KSU_DISABLE_POLICY
-    return -EOPNOTSUPP;
-#endif
-    uid_t uid;
-    struct app_profile *profile;
-    int ret = 0;
+	uid_t uid;
+	struct app_profile *profile;
+	int ret = 0;
 
-    if (copy_from_user(&uid, (char __user *)arg + offsetof(struct ksu_get_app_profile_cmd, profile.curr_uid),
-                       sizeof(uid_t))) {
-        pr_err("get_app_profile: copy_from_user failed\n");
-        return -EFAULT;
-    }
+	if (copy_from_user(&uid, (char __user *)arg + offsetof(struct ksu_get_app_profile_cmd, profile.curr_uid), sizeof(uid_t))) {
+		pr_err("get_app_profile: copy_from_user failed\n");
+		return -EFAULT;
+	}
 
-    rcu_read_lock();
-    profile = ksu_get_app_profile(uid);
-    rcu_read_unlock();
-    if (!profile) {
-        ret = -ENOENT;
-    } else {
-        if (copy_to_user((char __user *)arg + offsetof(struct ksu_get_app_profile_cmd, profile), profile,
-                         sizeof(struct app_profile))) {
-            pr_err("get_app_profile: copy_to_user failed\n");
-            ret = -EFAULT;
-        }
-        ksu_put_app_profile(profile);
-    }
-    return ret;
+	rcu_read_lock();
+	profile = ksu_get_app_profile(uid);
+	rcu_read_unlock();
+	if (!profile) {
+		ret = -ENOENT;
+	} else {
+		if (copy_to_user((char __user *)arg + offsetof(struct ksu_get_app_profile_cmd, profile), profile, sizeof(struct app_profile))) {
+			pr_err("get_app_profile: copy_to_user failed\n");
+			ret = -EFAULT;
+		}
+		ksu_put_app_profile(profile);
+	}
+	return ret;
 }
 
 static int do_set_app_profile(void __user *arg)
@@ -449,57 +433,36 @@ static int do_manage_mark(void __user *arg)
         return -EFAULT;
     }
 
-    switch (cmd.operation) {
-    case KSU_MARK_GET: {
-        // Get task mark status
-        ret = ksu_get_task_mark(cmd.pid);
-        if (ret < 0) {
-            pr_err("manage_mark: get failed for pid %d: %d\n", cmd.pid, ret);
-            return ret;
-        }
-        cmd.result = (u32)ret;
-        break;
-    }
-    case KSU_MARK_MARK: {
-        if (cmd.pid == 0) {
-            ksu_mark_all_process();
-        } else {
-            ret = ksu_set_task_mark(cmd.pid, true);
-            if (ret < 0) {
-                pr_err("manage_mark: set_mark failed for pid %d: %d\n", cmd.pid, ret);
-                return ret;
-            }
-        }
-        break;
-    }
-    case KSU_MARK_UNMARK: {
-        if (cmd.pid == 0) {
-            ksu_unmark_all_process();
-        } else {
-            ret = ksu_set_task_mark(cmd.pid, false);
-            if (ret < 0) {
-                pr_err("manage_mark: set_unmark failed for pid %d: %d\n", cmd.pid, ret);
-                return ret;
-            }
-        }
-        break;
-    }
-    case KSU_MARK_REFRESH: {
-        ksu_mark_running_process();
-        pr_info("manage_mark: refreshed running processes\n");
-        break;
-    }
-    default: {
-        pr_err("manage_mark: invalid operation %u\n", cmd.operation);
-        return -EINVAL;
-    }
-    }
-    if (copy_to_user(arg, &cmd, sizeof(cmd))) {
-        pr_err("manage_mark: copy_to_user failed\n");
-        return -EFAULT;
-    }
+	switch (cmd.operation) {
+		case KSU_MARK_GET: {
+			// on this one, we return seccomp status of a pid instead
+			// at the very least we have partial featureset
+			ret = ksu_get_task_mark(cmd.pid);
+			if (ret < 0) {
+			    pr_err("manage_mark: get failed for pid %d: %d\n", cmd.pid, ret);
+			    return ret;
+			}
+			cmd.result = (u32)ret;
+			break;
+		}
+#if 0 // TODO: revisit this sometime
+		case KSU_MARK_MARK: { break; }
+		case KSU_MARK_UNMARK: { break; }
+		case KSU_MARK_REFRESH: { break; }
+#endif
+		default: {
+			pr_err("manage_mark: invalid operation %u\n", cmd.operation);
+			return -EINVAL;
+		}
+	}
 
-    return 0;
+	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
+		pr_err("manage_mark: copy_to_user failed\n");
+		return -EFAULT;
+	}
+
+
+	return 0;
 }
 
 static int do_nuke_ext4_sysfs(void __user *arg)
@@ -778,171 +741,75 @@ static int do_disable_escape_to_root(void __user *arg)
     return 0;
 }
 
+static int do_get_hook_mode(void __user *arg)
+{
+	struct ksu_get_hook_mode_cmd cmd = {0};
+	const char *type = "Kprobes";
+
+#ifndef KSU_KPROBES_HOOK
+	type = "Manual";
+#endif
+
+	strscpy(cmd.mode, type, sizeof(cmd.mode));
+
+	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
+		pr_err("get_hook_mode: copy_to_user failed\n");
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
+static int do_get_version_tag(void __user *arg)
+{
+	struct ksu_get_version_tag_cmd cmd = {0};
+
+	strscpy(cmd.tag, KERNEL_SU_VERSION_TAG, sizeof(cmd.tag));
+
+	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
+		pr_err("get_version_tag: copy_to_user failed\n");
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
+static int do_disable_escape_to_root(void __user *arg)
+{
+	set_thread_flag(TIF_KSU_DISABLE_ESCAPE_WITH_ROOT);
+	return 0;
+}
+
 // IOCTL handlers mapping table
 // clang-format off
 static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
-    {
-        .cmd = KSU_IOCTL_GRANT_ROOT,
-        .name = "GRANT_ROOT",
-        .handler = do_grant_root,
-        .perm_check = allowed_for_su
-    },
-    {
-        .cmd = KSU_IOCTL_GET_INFO,
-        .name = "GET_INFO",
-        .handler = do_get_info,
-        .perm_check = always_allow
-    },
-    {
-        .cmd = KSU_IOCTL_GET_INFO_LEGACY,
-        .name = "GET_INFO_LEGACY",
-        .handler = do_get_info_legacy,
-        .perm_check = always_allow
-    },
-    {
-        .cmd = KSU_IOCTL_REPORT_EVENT,
-        .name = "REPORT_EVENT",
-        .handler = do_report_event,
-        .perm_check = only_root
-    },
-    {
-        .cmd = KSU_IOCTL_SET_SEPOLICY,
-        .name = "SET_SEPOLICY",
-        .handler = do_set_sepolicy,
-        .perm_check = only_root
-    },
-    {
-        .cmd = KSU_IOCTL_CHECK_SAFEMODE,
-        .name = "CHECK_SAFEMODE",
-        .handler = do_check_safemode,
-        .perm_check = always_allow
-    },
-    {
-        .cmd = KSU_IOCTL_GET_ALLOW_LIST,
-        .name = "GET_ALLOW_LIST",
-        .handler = do_get_allow_list,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_GET_DENY_LIST,
-        .name = "GET_DENY_LIST",
-        .handler = do_get_deny_list,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_NEW_GET_ALLOW_LIST,
-        .name = "NEW_GET_ALLOW_LIST",
-        .handler = do_new_get_allow_list,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_NEW_GET_DENY_LIST,
-        .name = "NEW_GET_DENY_LIST",
-        .handler = do_new_get_deny_list,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_UID_GRANTED_ROOT,
-        .name = "UID_GRANTED_ROOT",
-        .handler = do_uid_granted_root,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_UID_SHOULD_UMOUNT,
-        .name = "UID_SHOULD_UMOUNT",
-        .handler = do_uid_should_umount,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_GET_MANAGER_APPID,
-        .name = "GET_MANAGER_APPID",
-        .handler = do_get_manager_appid,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_GET_APP_PROFILE,
-        .name = "GET_APP_PROFILE",
-        .handler = do_get_app_profile,
-        .perm_check = only_manager
-    },
-    {
-        .cmd = KSU_IOCTL_SET_APP_PROFILE,
-        .name = "SET_APP_PROFILE",
-        .handler = do_set_app_profile,
-        .perm_check = only_manager
-    },
-    {
-        .cmd = KSU_IOCTL_GET_FEATURE,
-        .name = "GET_FEATURE",
-        .handler = do_get_feature,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_SET_FEATURE,
-        .name = "SET_FEATURE",
-        .handler = do_set_feature,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_GET_WRAPPER_FD,
-        .name = "GET_WRAPPER_FD",
-        .handler = do_get_wrapper_fd,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_MANAGE_MARK,
-        .name = "MANAGE_MARK",
-        .handler = do_manage_mark,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_NUKE_EXT4_SYSFS,
-        .name = "NUKE_EXT4_SYSFS",
-        .handler = do_nuke_ext4_sysfs,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_ADD_TRY_UMOUNT,
-        .name = "ADD_TRY_UMOUNT",
-        .handler = add_try_umount,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_SET_INIT_PGRP,
-        .name = "SET_INIT_PGRP",
-        .handler = do_set_init_pgrp,
-        .perm_check = only_root
-    },
-    {
-        .cmd = KSU_IOCTL_GET_SULOG_FD,
-        .name = "GET_SULOG_FD",
-        .handler = do_get_sulog_fd,
-        .perm_check = only_root
-    },
-    { 
-        .cmd = KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT, 
-        .name = "DISABLE_ESCAPE_TO_ROOT", 
-        .handler = do_disable_escape_to_root, 
-        .perm_check = only_root 
-    },
-    {
-        .cmd = KSU_IOCTL_GET_HOOK_MODE,
-        .name = "GET_HOOK_MODE",
-        .handler = do_get_hook_mode,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = KSU_IOCTL_GET_VERSION_TAG,
-        .name = "GET_VERSION_TAG",
-        .handler = do_get_version_tag,
-        .perm_check = manager_or_root
-    },
-    {
-        .cmd = 0,
-        .name = NULL,
-        .handler = NULL,
-        .perm_check = NULL
-    } // Sentinel
+	{ .cmd = KSU_IOCTL_GRANT_ROOT, .name = "GRANT_ROOT", .handler = do_grant_root, .perm_check = allowed_for_su },
+	{ .cmd = KSU_IOCTL_GET_INFO, .name = "GET_INFO", .handler = do_get_info, .perm_check = always_allow },
+	{ .cmd = KSU_IOCTL_GET_INFO_LEGACY, .name = "GET_INFO_LEGACY", .handler = do_get_info_legacy, .perm_check = always_allow },
+	{ .cmd = KSU_IOCTL_REPORT_EVENT, .name = "REPORT_EVENT", .handler = do_report_event, .perm_check = only_root },
+	{ .cmd = KSU_IOCTL_SET_SEPOLICY, .name = "SET_SEPOLICY", .handler = do_set_sepolicy, .perm_check = only_root },
+	{ .cmd = KSU_IOCTL_CHECK_SAFEMODE, .name = "CHECK_SAFEMODE", .handler = do_check_safemode, .perm_check = always_allow },
+	{ .cmd = KSU_IOCTL_GET_ALLOW_LIST, .name = "GET_ALLOW_LIST", .handler = do_get_allow_list, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_GET_DENY_LIST, .name = "GET_DENY_LIST", .handler = do_get_deny_list, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_NEW_GET_ALLOW_LIST, .name = "NEW_GET_ALLOW_LIST", .handler = do_new_get_allow_list, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_NEW_GET_DENY_LIST, .name = "NEW_GET_DENY_LIST", .handler = do_new_get_deny_list, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_UID_GRANTED_ROOT, .name = "UID_GRANTED_ROOT", .handler = do_uid_granted_root, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_UID_SHOULD_UMOUNT, .name = "UID_SHOULD_UMOUNT", .handler = do_uid_should_umount, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_GET_MANAGER_APPID, .name = "GET_MANAGER_APPID", .handler = do_get_manager_appid, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_GET_APP_PROFILE, .name = "GET_APP_PROFILE", .handler = do_get_app_profile, .perm_check = only_manager },
+	{ .cmd = KSU_IOCTL_SET_APP_PROFILE, .name = "SET_APP_PROFILE", .handler = do_set_app_profile, .perm_check = only_manager },
+	{ .cmd = KSU_IOCTL_GET_FEATURE, .name = "GET_FEATURE", .handler = do_get_feature, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_SET_FEATURE, .name = "SET_FEATURE", .handler = do_set_feature, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_GET_WRAPPER_FD, .name = "GET_WRAPPER_FD", .handler = do_get_wrapper_fd, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_MANAGE_MARK, .name = "MANAGE_MARK", .handler = do_manage_mark, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_NUKE_EXT4_SYSFS, .name = "NUKE_EXT4_SYSFS", .handler = do_nuke_ext4_sysfs, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_ADD_TRY_UMOUNT, .name = "ADD_TRY_UMOUNT", .handler = add_try_umount, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_SET_INIT_PGRP, .name = "SET_INIT_PGRP", .handler = do_set_init_pgrp, .perm_check = only_root },
+	{ .cmd = KSU_IOCTL_GET_SULOG_FD, .name = "GET_SULOG_FD", .handler = do_get_sulog_fd, .perm_check = only_root },
+	{ .cmd = KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT, .name = "DISABLE_ESCAPE_TO_ROOT", .handler = do_disable_escape_to_root, .perm_check = only_root },
+	{ .cmd = KSU_IOCTL_GET_HOOK_MODE, .name = "GET_HOOK_MODE", .handler = do_get_hook_mode, .perm_check = manager_or_root },
+	{ .cmd = KSU_IOCTL_GET_VERSION_TAG, .name = "GET_VERSION_TAG", .handler = do_get_version_tag, .perm_check = manager_or_root },
+	{ .cmd = 0, .name = NULL, .handler = NULL, .perm_check = NULL } // Sentinel
 };
 // clang-format on
 
@@ -954,17 +821,17 @@ long ksu_supercall_handle_ioctl(unsigned int cmd, void __user *argp)
     pr_info("ksu ioctl: cmd=0x%x from uid=%d\n", cmd, current_uid().val);
 #endif
 
-    for (i = 0; ksu_ioctl_handlers[i].handler; i++) {
-        if (cmd == ksu_ioctl_handlers[i].cmd) {
-            // Check permission first
-            if (ksu_ioctl_handlers[i].perm_check && !ksu_ioctl_handlers[i].perm_check()) {
-                pr_warn("ksu ioctl: permission denied for cmd=0x%x uid=%d\n", cmd, current_uid().val);
-                return -EPERM;
-            }
-            // Execute handler
-            return ksu_ioctl_handlers[i].handler(argp);
-        }
-    }
+	for (i = 0; ksu_ioctl_handlers[i].handler; i++) {
+		if (cmd == ksu_ioctl_handlers[i].cmd) {
+			// Check permission first
+			if (ksu_ioctl_handlers[i].perm_check && !ksu_ioctl_handlers[i].perm_check()) {
+				pr_warn("ksu ioctl: permission denied for cmd=0x%x uid=%d\n", cmd, current_uid().val);
+				return -EPERM;
+			}
+			// Execute handler
+			return ksu_ioctl_handlers[i].handler(argp);
+		}
+	}
 
     pr_warn("ksu ioctl: unsupported command 0x%x\n", cmd);
     return -ENOTTY;

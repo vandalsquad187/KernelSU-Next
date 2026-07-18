@@ -163,66 +163,72 @@ void cache_sid(void)
 static bool is_sid_match(const struct cred *cred, u32 cached_sid,
                          const char *fallback_context)
 {
-    if (!cred) {
-        return false;
-    }
+	if (!cred) {
+		return false;
+	}
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
-    const struct task_security_struct *tsec = selinux_cred(cred);
+	const struct task_security_struct *tsec = selinux_cred(cred);
 #else
-    const struct cred_security_struct *tsec = selinux_cred(cred);
+	const struct cred_security_struct *tsec = selinux_cred(cred);
 #endif
-    if (!tsec) {
-        return false;
-    }
+	if (!tsec) {
+		return false;
+	}
 
-    // Fast path: use cached SID if available
-    if (likely(cached_sid != 0)) {
-        return tsec->sid == cached_sid;
-    }
+	// Fast path: use cached SID if available
+	if (likely(cached_sid != 0)) {
+		return tsec->sid == cached_sid;
+	}
 
-    // Slow path fallback: string comparison (only before cache is initialized)
-    struct lsm_context ctx;
-    bool result;
-    if (__security_secid_to_secctx(tsec->sid, &ctx)) {
-        return false;
-    }
-    result = strncmp(fallback_context, ctx.context, ctx.len) == 0;
-    __security_release_secctx(&ctx);
-    return result;
+	// Slow path fallback: string comparison (only before cache is initialized)
+	struct lsm_context ctx;
+	bool result;
+	if (__security_secid_to_secctx(tsec->sid, &ctx)) {
+		return false;
+	}
+	result = strncmp(fallback_context, ctx.context, ctx.len) == 0;
+	__security_release_secctx(&ctx);
+	return result;
 }
 
 bool is_task_ksu_domain(const struct cred *cred)
 {
-    return is_sid_match(cred, cached_su_sid, KERNEL_SU_CONTEXT);
+	return is_sid_match(cred, cached_su_sid, KERNEL_SU_CONTEXT);
 }
 
 bool is_ksu_domain(void)
 {
-    return is_task_ksu_domain(current_cred());
+	return is_task_ksu_domain(current_cred());
 }
+
+bool susfs_is_current_ksu_domain(void)
+{
+	return is_ksu_domain();
+}
+EXPORT_SYMBOL(susfs_is_current_ksu_domain);
 
 bool is_zygote(const struct cred *cred)
 {
-    return is_sid_match(cred, cached_zygote_sid, ZYGOTE_CONTEXT);
+	return is_sid_match(cred, cached_zygote_sid, ZYGOTE_CONTEXT);
 }
 
 bool is_init(const struct cred *cred)
 {
-    return is_sid_match(cred, cached_init_sid, INIT_CONTEXT);
+	return is_sid_match(cred, cached_init_sid, INIT_CONTEXT);
 }
 
 void escape_to_root_for_adb_root(void)
 {
-    struct cred *cred = prepare_creds();
-    if (!cred) {
-        pr_err("Failed to prepare adbd's creds!\n");
-        return;
-    }
+	struct cred *cred = prepare_creds();
+	if (!cred) {
+		pr_err("Failed to prepare adbd's creds!\n");
+		return;
+	}
 
-    if (transive_to_domain(KERNEL_SU_CONTEXT, cred, true)) {
-        pr_err("transive domain failed.\n");
-        abort_creds(cred);
-        return;
-    }
-    commit_creds(cred);
+	if (transive_to_domain(KERNEL_SU_CONTEXT, cred, true)) {
+		pr_err("transive domain failed.\n");
+		abort_creds(cred);
+		return;
+	}
+	commit_creds(cred);
 }

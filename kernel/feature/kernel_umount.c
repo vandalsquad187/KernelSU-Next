@@ -1,24 +1,4 @@
-#include <linux/sched.h>
-#include <linux/slab.h>
-#include <linux/task_work.h>
-#include <linux/cred.h>
-#include <linux/fs.h>
-#include <linux/mount.h>
-#include <linux/namei.h>
-#include <linux/nsproxy.h>
-#include <linux/path.h>
-#include <linux/printk.h>
-#include <linux/types.h>
-
-#include "feature/kernel_umount.h"
-#include "klog.h" // IWYU pragma: keep
-#include "policy/allowlist.h"
-#include "selinux/selinux.h"
-#include "policy/feature.h"
-#include "runtime/ksud_boot.h"
-#include "ksu.h"
-
-static bool ksu_kernel_umount_enabled = true;
+static bool ksu_kernel_umount_enabled __read_mostly = true;
 
 static int kernel_umount_feature_get(u64 *value)
 {
@@ -51,7 +31,7 @@ static void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
 	}
 }
 
-static void try_umount(const char *mnt, int flags)
+void try_umount(const char *mnt, int flags)
 {
 	struct path path;
 	int err = kern_path(mnt, 0, &path);
@@ -67,21 +47,22 @@ static void try_umount(const char *mnt, int flags)
 
 	ksu_umount_mnt(mnt, &path, flags);
 }
+EXPORT_SYMBOL(try_umount);
 
-struct umount_tw {
-	struct callback_head cb;
-};
-
-int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
+static inline int ksu_handle_umount(struct cred *new, const struct cred *old)
 {
-	// if there isn't any module mounted, just ignore it!
-	if (!ksu_module_mounted) {
-		return 0;
-	}
+	uid_t new_uid = ksu_get_uid_t(new->uid);
+	uid_t old_uid = ksu_get_uid_t(old->uid);
 
-	if (!ksu_kernel_umount_enabled) {
+	if (!ksu_kernel_umount_enabled)
 		return 0;
-	}
+
+	// if there isn't any module mounted, just ignore it!
+	if (!ksu_module_mounted)
+		return 0;
+
+	if (!ksu_cred)
+		return 0;
 
 	// There are 6 scenarios:
 	// 1. Normal app: zygote -> appuid
@@ -90,13 +71,11 @@ int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
 	// 4. Webview zygote forked from zygote: zygote -> WEBVIEW_ZYGOTE_UID (no need to handle, app cannot run custom code)
 	// 5. Isolated process forked from app zygote: appuid -> isolated_process (already handled by 3)
 	// 6. Isolated process forked from webview zygote (no need to handle, app cannot run custom code)
-	if (!is_appuid(new_uid) && !is_isolated_process(new_uid)) {
+	if (!is_appuid(new_uid) && !is_isolated_process(new_uid))
 		return 0;
-	}
 
-	if (!ksu_uid_should_umount(new_uid) && !is_isolated_process(new_uid)) {
+	if (!ksu_uid_should_umount(new_uid) && !is_isolated_process(new_uid))
 		return 0;
-	}
 
 	// check old process's selinux context, if it is not zygote, ignore it!
 	// because some su apps may setuid to untrusted_app but they are in global mount namespace
