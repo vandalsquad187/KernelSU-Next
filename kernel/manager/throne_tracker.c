@@ -23,7 +23,7 @@ struct uid_data {
 	char package[KSU_MAX_PACKAGE_NAME];
 };
 
-static void crown_manager(const char *apk, struct list_head *uid_data)
+static __always_inline void crown_manager(const char *apk, struct list_head *uid_data)
 {
 	char pkg[KSU_MAX_PACKAGE_NAME];
 	if (get_pkg_from_apk_path(pkg, apk) < 0) {
@@ -136,35 +136,22 @@ FILLDIR_RETURN_TYPE my_actor(struct dir_context *ctx, const char *name,
 				}
 			}
 
-			bool is_manager = is_manager_apk(dirpath);
-			pr_info("Found new base.apk at path: %s, is_manager: %d\n", dirpath,
-					is_manager);
-			if (is_manager) {
-				crown_manager(dirpath, my_ctx->private_data);
-				*my_ctx->stop = 1;
-
-				// Manager found, clear APK cache list
-				list_for_each_entry_safe (pos, n, &apk_path_hash_list, list) {
-					list_del(&pos->list);
-					kfree(pos);
-				}
-			} else {
-				struct apk_path_hash *apk_data = kzalloc(sizeof(struct apk_path_hash), GFP_KERNEL);
-				if (!apk_data) {
-					pr_err("Failed to allocate apk_path_hash for %s\n", dirpath);
-					return FILLDIR_ACTOR_CONTINUE;
-				}
-				apk_data->hash = hash;
-				apk_data->exists = true;
-				list_add_tail(&apk_data->list, &apk_path_hash_list);
-			}
-		}
+	// now put this on candidate_path
+	if (d_type == DT_REG && namelen == 8 && !memcmp(name, "base.apk", 8)) {
+		snprintf(candidate_path, DATA_PATH_LEN, "%s/%.*s", my_ctx->parent_dir, namelen, name);
 	}
 
 	return FILLDIR_ACTOR_CONTINUE;
 }
 
-void search_manager(const char *path, int depth, struct list_head *uid_data)
+// compat: https://elixir.bootlin.com/linux/v3.9/source/include/linux/fs.h#L771
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,9,0)
+#define ksu_get_magic(x) ((x)->f_inode->i_sb->s_magic)
+#else
+#define ksu_get_magic(x) ((x)->f_path.dentry->d_inode->i_sb->s_magic)
+#endif
+
+static noinline void search_manager(const char *path, int depth, struct list_head *uid_data)
 {
 	int i, stop = 0;
 	struct list_head data_path_list;
@@ -359,10 +346,58 @@ void __init ksu_throne_tracker_init()
 {
 	struct apk_path_hash *pos, *n;
 
-	list_for_each_entry_safe (pos, n, &apk_path_hash_list, list) {
-		list_del(&pos->list);
-		kfree(pos);
+	pr_info("throne_tracker: pid: %d started\n", current->pid);
+
+	mutex_lock(&throne_tracker_mutex);
+
+test_tmp:
+	if (!is_file_existing("/data/system/packages.list.tmp"))
+		goto test_list;
+
+	if (IS_ENABLED(CONFIG_KSU_DEBUG))
+		pr_info("throne_tracker: rename not finished! retry!\n");
+
+	msleep(20); // yield
+	goto test_tmp;
+
+test_list:
+	if (is_file_stable(SYSTEM_PACKAGES_LIST_PATH))
+		goto start_tt;
+
+	if (IS_ENABLED(CONFIG_KSU_DEBUG))
+		pr_info("throne_tracker: rename not finished! retry!\n");
+
+	msleep(20); // yield
+	goto test_list;	
+
+start_tt:
+	// lessen that window where user opens manager right away, yet its not crowned
+	set_user_nice(current, -10);
+
+	escape_to_root_forced();
+	throne_tracker_fn(prune_only);
+
+	mutex_unlock(&throne_tracker_mutex);
+
+	pr_info("throne_tracker: pid: %d exit!\n", current->pid);
+	return 0;
+}
+
+void track_throne(bool prune_only)
+{
+#ifndef CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED
+	static bool throne_tracker_first_run __read_mostly = true;
+	if (unlikely(throne_tracker_first_run)) {
+		mutex_lock(&throne_tracker_mutex);
+		throne_tracker_fn(prune_only);
+		mutex_unlock(&throne_tracker_mutex);
+		throne_tracker_first_run = false;
+		return;
 	}
+#endif
+
+	// HACK: force cast prune_only to be a void *
+	kthread_run(throne_tracker_thread, (void *)prune_only, "ksu_throne");
 }
 
 void __exit ksu_throne_tracker_exit()

@@ -61,9 +61,6 @@ static void ksu_handle_extra_susfs_work(void)
         pr_err("susfs: Failed adding task_work 'susfs_handle_setuid_tw', err: %d\n", err);
     }
 }
-#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
-extern void susfs_try_umount(uid_t uid);
-#endif // #ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
 #endif // #ifdef CONFIG_KSU_SUSFS
 
 LSM_HANDLER_TYPE ksu_handle_rename(struct dentry *old_dentry, struct dentry *new_dentry)
@@ -151,11 +148,7 @@ do_umount:
 #endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 
     // Handle kernel umount
-#ifndef CONFIG_KSU_SUSFS_TRY_UMOUNT
     return ksu_handle_umount(new, old);
-#else
-    susfs_try_umount(new_uid);
-#endif // #ifndef CONFIG_KSU_SUSFS_TRY_UMOUNT
 
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
     //susfs_run_sus_path_loop(new_uid);

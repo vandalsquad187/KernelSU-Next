@@ -64,46 +64,33 @@ void setup_groups(struct root_profile *profile, struct cred *cred)
     put_group_info(group_info);
 }
 
-void seccomp_filter_release(struct task_struct *tsk);
-
-// https://cs.android.com/android/_/android/kernel/common/+/5346453405bf12d7ed6003f45dd47b71744fe1be
-// Some 15-6.6 kernel have this backport while others don't have, e.g. Pixel 10
-// See also:
-// https://github.com/tiann/KernelSU/issues/3629
-#define NEED_BACKPORT_COMPAT                                                                                           \
-    LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
-
-#if NEED_BACKPORT_COMPAT
-static bool has_call_to_spin_lock = false;
-#endif
-
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 static void disable_seccomp(void)
 {
-    struct task_struct *fake;
+	struct task_struct *fake;
 
-    fake = kmalloc(sizeof(*fake), GFP_KERNEL);
-    if (!fake) {
-        pr_warn("failed to alloc fake task_struct\n");
-        return;
-    }
+	fake = kmalloc(sizeof(*fake), GFP_KERNEL);
+	if (!fake) {
+		pr_warn("failed to alloc fake task_struct\n");
+		return;
+	}
 
-    // Refer to kernel/seccomp.c: seccomp_set_mode_strict
-    // When disabling Seccomp, ensure that current->sighand->siglock is held during the operation.
-    spin_lock_irq(&current->sighand->siglock);
-    // disable seccomp
-#if defined(CONFIG_GENERIC_ENTRY) &&                                           \
-    LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-    clear_syscall_work(SECCOMP);
+	// Refer to kernel/seccomp.c: seccomp_set_mode_strict
+	// When disabling Seccomp, ensure that current->sighand->siglock is held during the operation.
+	spin_lock_irq(&current->sighand->siglock);
+	// disable seccomp
+#if defined(CONFIG_GENERIC_ENTRY) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+	clear_syscall_work(SECCOMP);
 #else
     clear_thread_flag(TIF_SECCOMP);
 #endif
 
-    memcpy(fake, current, sizeof(*fake));
+	memcpy(fake, current, sizeof(*fake));
 
-    current->seccomp.mode = 0;
-    current->seccomp.filter = NULL;
-    atomic_set(&current->seccomp.filter_count, 0);
-    spin_unlock_irq(&current->sighand->siglock);
+	current->seccomp.mode = 0;
+	current->seccomp.filter = NULL;
+	atomic_set(&current->seccomp.filter_count, 0);
+	spin_unlock_irq(&current->sighand->siglock);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
     // https://github.com/torvalds/linux/commit/bfafe5efa9754ebc991750da0bcca2a6694f3ed3#diff-45eb79a57536d8eccfc1436932f093eb5c0b60d9361c39edb46581ad313e8987R576-R577
@@ -119,8 +106,124 @@ static void disable_seccomp(void)
     fake->sighand = NULL;
 #endif
 
-    seccomp_filter_release(fake);
-    kfree(fake);
+	seccomp_filter_release(fake);
+	kfree(fake);
+}
+#else /* ! LINUX_VERSION_CODE < 5.9 */
+/*
+ * for < 5.9 lets have free_task do it for us (put_seccomp_filter)
+ * we risk a double free / double decrement which isn't safe on old kernels
+ * I'm not even sure if this thing is needed on newer kernels
+ *
+ */
+static void disable_seccomp(void)
+{
+	spin_lock_irq(&current->sighand->siglock);
+
+	clear_thread_flag(TIF_SECCOMP);
+	current->seccomp.mode = 0;
+	current->seccomp.filter = NULL;
+
+	spin_unlock_irq(&current->sighand->siglock);
+}
+#endif // 5.9
+
+static int escape_to_root(bool is_forced)
+{
+	int ret = 0;
+	struct cred *cred;
+	struct root_profile *profile = NULL;
+	struct user_struct *new_user;
+
+	cred = prepare_creds();
+	if (!cred) {
+		pr_warn("prepare_creds failed!\n");
+		return -ENOMEM;
+	}
+
+	if (!is_forced && ksu_get_uid_t(cred->euid) == 0) {
+		pr_warn("Already root, don't escape!\n");
+		goto out_abort_creds;
+	}
+
+	if (test_thread_flag(TIF_KSU_DISABLE_ESCAPE_WITH_ROOT)) {
+		pr_warn("TIF_KSU_DISABLE_ESCAPE_WITH_ROOT found, don't escape!\n");
+		goto out_abort_creds;
+	}
+
+	profile = ksu_get_root_profile(ksu_get_uid_t(cred->uid));
+
+	ksu_get_uid_t(cred->uid) = profile->uid;
+	ksu_get_uid_t(cred->suid) = profile->uid;
+	ksu_get_uid_t(cred->euid) = profile->uid;
+	ksu_get_uid_t(cred->fsuid) = profile->uid;
+
+	ksu_get_uid_t(cred->gid) = profile->gid;
+	ksu_get_uid_t(cred->fsgid) = profile->gid;
+	ksu_get_uid_t(cred->sgid) = profile->gid;
+	ksu_get_uid_t(cred->egid) = profile->gid;
+	cred->securebits = 0;
+
+	BUILD_BUG_ON(sizeof(profile->capabilities.effective) != sizeof(kernel_cap_t));
+
+	/*
+	 * Mirror the kernel set*uid path: update cred->user first, then
+	 * cred->ucounts, before commit_creds(). commit_creds() moves
+	 * RLIMIT_NPROC accounting based on cred->user; if uid changes while
+	 * user/ucounts stay stale, the old charge can remain pinned to the
+	 * previous UID.
+	 * See kernel/sys.c:set_user() and kernel/cred.c:set_cred_ucounts() /
+	 * commit_creds():
+	 * https://github.com/torvalds/linux/blob/v5.14/kernel/sys.c
+	 * https://github.com/torvalds/linux/blob/v5.14/kernel/cred.c
+	 */
+	new_user = alloc_uid(cred->uid);
+	if (!new_user) {
+		ret = -ENOMEM;
+		goto out_abort_creds;
+	}
+
+	free_uid(cred->user);
+	cred->user = new_user;
+
+	// v5.14+ added cred->ucounts, so we must refresh it after changing uid/user:
+	// https://github.com/torvalds/linux/commit/905ae01c4ae2ae3df05bb141801b1db4b7d83c61#diff-ff6060da281bd9ef3f24e17b77a9b0b5b2ed2d7208bb69b29107bee69732bd31
+	// on older kernels, per-UID process accounting lives in user_struct.
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
+	if (set_cred_ucounts(cred)) {
+		goto out_abort_creds;
+	}
+#endif
+
+	// setup capabilities
+	// we need CAP_DAC_READ_SEARCH becuase `/data/adb/ksud` is not accessible for non root process
+	// we add it here but don't add it to cap_inhertiable, it would be dropped automaticly after exec!
+	u64 cap_for_ksud = profile->capabilities.effective | CAP_DAC_READ_SEARCH;
+	memcpy(&cred->cap_effective, &cap_for_ksud, sizeof(cred->cap_effective));
+	memcpy(&cred->cap_permitted, &profile->capabilities.effective, sizeof(cred->cap_permitted));
+	memcpy(&cred->cap_bset, &profile->capabilities.effective, sizeof(cred->cap_bset));
+
+	setup_groups(profile, cred);
+	setup_selinux(profile->selinux_domain, cred);
+
+	commit_creds(cred);
+
+	if (test_thread_flag(TIF_SECCOMP))
+		disable_seccomp();
+
+	if (profile->flags & FLAG_KSU_NO_NEW_PRIVS) {
+		set_thread_flag(TIF_KSU_DISABLE_ESCAPE_WITH_ROOT);
+	}
+	
+	setup_mount_ns(profile->namespaces);
+	ksu_put_root_profile(profile);
+	return 0;
+
+out_abort_creds:
+	if (profile)
+		ksu_put_root_profile(profile);
+	abort_creds(cred);
+	return ret;
 }
 
 int escape_with_root_profile(void)

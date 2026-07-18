@@ -389,7 +389,7 @@ void ksu_sulog_emit_pending(struct ksu_sulog_pending_event *pending, int retval,
     ksu_sulog_free_pending(pending);
 }
 
-int ksu_sulog_emit_grant_root(int retval, __u32 uid, __u32 euid, gfp_t gfp)
+static int ksu_sulog_emit_grant_root(int retval, __u32 uid, __u32 euid, gfp_t gfp)
 {
     struct ksu_sulog_pending_event *pending;
     struct ksu_sulog_identity identity = {
@@ -401,8 +401,81 @@ int ksu_sulog_emit_grant_root(int retval, __u32 uid, __u32 euid, gfp_t gfp)
     if (!pending)
         return 0;
 
-    ksu_sulog_emit_pending(pending, retval, gfp);
-    return 0;
+	pending = ksu_sulog_capture_grant_root(&identity, gfp);
+	if (!pending)
+		return 0;
+
+	ksu_sulog_emit_pending(pending, retval, gfp);
+	return 0;
+}
+
+static int ksu_sulog_emit(__u16 event_type, const char *bprm_argv, size_t bprm_argv_len, gfp_t gfp)
+{
+	if (!ksu_sulog_is_enabled())
+		return 0;
+
+	struct ksu_sulog_pending_event *pending;
+
+	pending = ksu_sulog_capture(event_type, bprm_argv, bprm_argv_len, gfp);
+	if (!pending)
+		return 0;
+
+	ksu_sulog_emit_pending(pending, 0, gfp);
+	return 0;
+}
+
+static void ksu_sulog_emit_bprm(const char *filename)
+{
+	if (!ksu_sulog_is_enabled())
+		return;
+
+	// maybe tag the process instead?
+	if (!is_ksu_domain())
+		return;
+
+	if (!current->mm)
+		return;
+
+	unsigned long arg_start = current->mm->arg_start;
+	unsigned long arg_end = current->mm->arg_end;
+	size_t arg_len = arg_end - arg_start;
+
+	if (arg_len <= 0)
+		return;
+
+#define ARGV_MAX_BPRM 128
+	char args[ARGV_MAX_BPRM] = {0};
+
+	size_t argv_copy_len = (arg_len > ARGV_MAX_BPRM) ? ARGV_MAX_BPRM : arg_len;
+
+	// we cant use strncpy on here, else it will truncate once it sees \0
+	if (ksu_copy_from_user_retry(args, (void __user *)arg_start, argv_copy_len))
+		return;
+
+	args[argv_copy_len - 1] = '\0';
+
+	// we grab strlen of argv0 as that needs to be kept as \0, basically to skip it
+	size_t argv0_len = strnlen(args, argv_copy_len);
+	char *buf = args + argv0_len + 1;
+
+flatten:
+	if (buf >= args + argv_copy_len - 1)
+		goto flatten_done;
+
+	int len = strlen(buf);
+	if (!len)
+		goto flatten_done;
+	
+	*(buf + len) = ' ';
+	buf = buf + len + 1;
+
+	if (buf - args < argv_copy_len - argv0_len - 1)
+		goto flatten;
+
+flatten_done:
+	//	this should look like
+	//      /system/bin/sh\0-c sh -c id
+	ksu_sulog_emit(KSU_SULOG_EVENT_ROOT_EXECVE, args, argv_copy_len, GFP_KERNEL);
 }
 
 struct ksu_event_queue *ksu_sulog_get_queue(void)
