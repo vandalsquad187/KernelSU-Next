@@ -1,6 +1,9 @@
 #ifndef __KSU_UAPI_SUPERCALL_H
 #define __KSU_UAPI_SUPERCALL_H
 
+// 2: allowlist v4 root profile flags
+#define KERNEL_SU_UAPI_VERSION 2
+
 /* Magic numbers for reboot hook to install fd */
 #define KSU_INSTALL_MAGIC1 0xDEADBEEF
 #define KSU_INSTALL_MAGIC2 0xCAFEBABE
@@ -19,6 +22,13 @@ struct ksu_become_daemon_cmd {
 #define KSU_GET_INFO_FLAG_PR_BUILD (1U << 3)
 
 struct ksu_get_info_cmd {
+	__u32 version; /* Output: KERNEL_SU_VERSION */
+	__u32 flags; /* Output: KSU_GET_INFO_FLAG_* bits */
+	__u32 features; /* Output: max feature ID supported */
+	__u32 uapi_version; /* Output: KERNEL_SU_UAPI_VERSION */
+};
+
+struct ksu_get_info_legacy_cmd {
 	__u32 version; /* Output: KERNEL_SU_VERSION */
 	__u32 flags; /* Output: KSU_GET_INFO_FLAG_* bits */
 	__u32 features; /* Output: max feature ID supported */
@@ -110,14 +120,6 @@ struct ksu_manage_mark_cmd {
 	__u32 result; /* Output: for get operation - mark status or reg_count */
 };
 
-struct ksu_get_hook_mode_cmd {
-	char mode[16];
-};
-
-struct ksu_get_version_tag_cmd {
-	char tag[32];
-};
-
 #define KSU_MARK_GET 1
 #define KSU_MARK_MARK 2
 #define KSU_MARK_UNMARK 3
@@ -133,6 +135,14 @@ struct ksu_add_try_umount_cmd {
 	__u8 mode; /* denotes what to do with it 0:wipe_list 1:add_to_list 2:delete_entry */
 };
 
+struct ksu_get_hook_mode_cmd {
+	char mode[16];
+};
+
+struct ksu_get_version_tag_cmd {
+	char tag[32];
+};
+
 struct ksu_get_sulog_fd_cmd {
 	__u32 flags; /* Input: reserved for future use, must be 0 */
 };
@@ -143,7 +153,8 @@ struct ksu_get_sulog_fd_cmd {
 
 // IOCTL command definitions
 #define KSU_IOCTL_GRANT_ROOT _IOC(_IOC_NONE, 'K', 1, 0)
-#define KSU_IOCTL_GET_INFO _IOC(_IOC_READ, 'K', 2, 0)
+#define KSU_IOCTL_GET_INFO _IOR('K', 2, struct ksu_get_info_cmd)
+#define KSU_IOCTL_GET_INFO_LEGACY _IOC(_IOC_READ, 'K', 2, 0)
 #define KSU_IOCTL_REPORT_EVENT _IOC(_IOC_WRITE, 'K', 3, 0)
 #define KSU_IOCTL_SET_SEPOLICY _IOC(_IOC_READ|_IOC_WRITE, 'K', 4, 0)
 #define KSU_IOCTL_CHECK_SAFEMODE _IOC(_IOC_READ, 'K', 5, 0)
@@ -166,7 +177,7 @@ struct ksu_get_sulog_fd_cmd {
 #define KSU_IOCTL_ADD_TRY_UMOUNT _IOC(_IOC_WRITE, 'K', 18, 0)
 #define KSU_IOCTL_SET_INIT_PGRP _IO('K', 19)
 #define KSU_IOCTL_GET_SULOG_FD _IOW('K', 20, struct ksu_get_sulog_fd_cmd)
-
+#define KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT _IO('K', 21)
 #define KSU_IOCTL_GET_HOOK_MODE _IOC(_IOC_READ, 'K', 98, 0)
 #define KSU_IOCTL_GET_VERSION_TAG _IOC(_IOC_READ, 'K', 99, 0)
 

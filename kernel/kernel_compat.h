@@ -33,13 +33,9 @@ static inline struct key *ksu_get_current_session_keyring() { return rcu_derefer
 static inline struct key *ksu_get_current_session_keyring() { return rcu_dereference(current->cred->tgcred->session_keyring); }
 #endif
 
-__attribute__((cold))
-static noinline void ksu_grab_init_session_keyring(const char *filename)
+static noinline void ksu_grab_init_session_keyring()
 {
 	if (init_session_keyring)
-		return;
-		
-	if (!strstr(filename, "init")) 
 		return;
 
 	if (!!strcmp(current->comm, "init"))
@@ -48,8 +44,7 @@ static noinline void ksu_grab_init_session_keyring(const char *filename)
 	if (!!!is_init(current_cred()))
 		return;
 
-	// thats surely some exclamation comedy
-	// and now we are sure that this is the key we want
+	// now we are sure that this is the key we want
 	struct key *keyring = ksu_get_current_session_keyring();
 	if (!keyring)
 		return;
@@ -82,33 +77,41 @@ filp_open:
 }
 #define filp_open ksu_filp_open_compat
 #else
-static inline void ksu_grab_init_session_keyring(const char *filename) {} // no-op
+static inline void ksu_grab_init_session_keyring() {} // no-op
 #endif // KEYS && < 5.2
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
-// https://elixir.bootlin.com/linux/v4.14.336/source/fs/read_write.c#L418
-static noinline ssize_t ksu_kernel_read_compat(struct file *p, void *buf, size_t count, loff_t *pos)
+#ifndef __ro_after_init
+#define __ro_after_init
+#endif
+
+extern long copy_from_kernel_nofault(void *dst, const void *src, size_t size);
+
+/**
+ * ksu_copy_from_user_retry
+ * try nofault copy first, if it fails, try with plain
+ * paramters are the same as copy_from_user
+ * 0 = success
+ */
+extern long copy_from_user_nofault(void *dst, const void __user *src, size_t size);
+static __always_inline long ksu_copy_from_user_retry(void *to, const void __user *from, unsigned long count)
 {
-	mm_segment_t old_fs;
-	old_fs = get_fs();
-	set_fs(get_ds());
-	ssize_t result = vfs_read(p, (void __user *)buf, count, pos);
-	set_fs(old_fs);
-	return result;
+	long ret = copy_from_user_nofault(to, from, count);
+	if (likely(!ret))
+		return ret;
+
+	// we faulted! fallback to slow path
+	return copy_from_user(to, from, count);
 }
-// https://elixir.bootlin.com/linux/v4.14.336/source/fs/read_write.c#L512
-static noinline ssize_t ksu_kernel_write_compat(struct file *p, const void *buf, size_t count, loff_t *pos)
-{
-	mm_segment_t old_fs;
-	old_fs = get_fs();
-	set_fs(get_ds());
-	ssize_t res = vfs_write(p, (__force const char __user *)buf, count, pos);
-	set_fs(old_fs);
-	return res;
-}
-#define kernel_read ksu_kernel_read_compat
-#define kernel_write ksu_kernel_write_compat
-#endif // < 4.14
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 0, 0)
+#define d_inode(dentry) ((dentry)->d_inode)
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 16, 0) && defined(CONFIG_ARM64)
+#ifndef TIF_SECCOMP
+#define TIF_SECCOMP		11
+#endif
+#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
 static inline void *ksu_kvmalloc(size_t size, gfp_t flags)
@@ -164,22 +167,61 @@ static inline struct file *ksu_dentry_open(const struct path *path, int flags, c
 #endif
 #endif
 
-/**
- * ksu_copy_from_user_retry
- * try nofault copy first, if it fails, try with plain
- * paramters are the same as copy_from_user
- * 0 = success
- */
-extern long copy_from_user_nofault(void *dst, const void __user *src, size_t size);
-static __always_inline long ksu_copy_from_user_retry(void *to, const void __user *from, unsigned long count)
-{
-	long ret = copy_from_user_nofault(to, from, count);
-	if (likely(!ret))
-		return ret;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0) && defined(CONFIG_JUMP_LABEL)
+#define KSU_CAN_USE_JUMP_LABEL
 
-	// we faulted! fallback to slow path
-	return copy_from_user(to, from, count);
+// https://elixir.bootlin.com/linux/v3.10.108/source/include/linux/jump_label.h#L211
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 3, 0)
+static inline void ksu_static_key_enable(struct static_key *key)
+{
+	int count = atomic_read(&key->enabled);
+	if (!count)
+		static_key_slow_inc(key);
 }
+
+static inline void ksu_static_key_disable(struct static_key *key)
+{
+	int count = atomic_read(&key->enabled);
+	if (count)
+		static_key_slow_dec(key);
+}
+
+#define static_branch_enable(k)		ksu_static_key_enable(k)
+#define static_branch_disable(k)	ksu_static_key_disable(k)
+
+#define static_branch_unlikely(k)	static_key_false(k)
+#define static_branch_likely(k)		static_key_true(k)
+
+#ifndef DEFINE_STATIC_KEY_FALSE
+#define DEFINE_STATIC_KEY_FALSE(k)	struct static_key k = STATIC_KEY_INIT_FALSE
+#endif
+
+#ifndef DEFINE_STATIC_KEY_TRUE
+#define DEFINE_STATIC_KEY_TRUE(k)	struct static_key k = STATIC_KEY_INIT_TRUE
+#endif
+
+#endif // < 4.3
+#endif // >= 3.4 && CONFIG_JUMP_LABEL
+
+struct user_arg_ptr {
+#ifdef CONFIG_COMPAT
+	bool is_compat;
+#endif
+	union {
+		const char __user *const __user *native;
+#ifdef CONFIG_COMPAT
+		const compat_uptr_t __user *compat;
+#endif
+	} ptr;
+};
+
+#ifndef untagged_addr
+#define untagged_addr(addr) (addr)
+#endif
+
+#ifndef __nocfi
+#define __nocfi
+#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0) // caller is reponsible for sanity!
 static inline void ksu_zeroed_strncpy(char *dest, const char *src, size_t count)
@@ -224,11 +266,8 @@ __weak char *bin2hex(char *dst, const void *src, size_t count)
 #define file_inode(f) ((f)->f_path.dentry->d_inode)
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0) && !defined(KSU_HAS_SELINUX_INODE)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0) && !defined(CONFIG_LSM)
 #define selinux_inode(inode) ((inode)->i_security)
-#endif
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0) && !defined(KSU_HAS_SELINUX_CRED)
 #define selinux_cred(cred) ((cred)->security)
 #endif
 
@@ -278,11 +317,43 @@ static inline u64 ksu_ktime_get_ns(void) { return ktime_to_ns(ktime_get()); }
 #endif
 #endif
 
-#ifndef untagged_addr
-#define untagged_addr(addr) (addr)
-#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+// https://elixir.bootlin.com/linux/v4.14.336/source/fs/read_write.c#L418
+static noinline ssize_t ksu_kernel_read_compat(struct file *p, void *buf, size_t count, loff_t *pos)
+{
+	mm_segment_t old_fs;
+	old_fs = get_fs();
+	set_fs(get_ds());
+	ssize_t result = vfs_read(p, (void __user *)buf, count, pos);
+	set_fs(old_fs);
+	return result;
+}
+// https://elixir.bootlin.com/linux/v4.14.336/source/fs/read_write.c#L512
+static noinline ssize_t ksu_kernel_write_compat(struct file *p, const void *buf, size_t count, loff_t *pos)
+{
+	mm_segment_t old_fs;
+	old_fs = get_fs();
+	set_fs(get_ds());
+	ssize_t res = vfs_write(p, (__force const char __user *)buf, count, pos);
+	set_fs(old_fs);
+	return res;
+}
+#define kernel_read ksu_kernel_read_compat
+#define kernel_write ksu_kernel_write_compat
+#endif // < 4.14
 
 static inline void ksu_kfree_byref(void *buf) { kfree(*(void **)buf); }
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION (3, 9, 0)
+// hashtable.h, list.h, rculist.h
+// ref: https://github.com/torvalds/linux/commit/b67bfe0d42cac56c512dd5da4b1b347a23f4b70a
+#include "linux_hashtable.h"
+static inline int __must_check ksu_kref_get_unless_zero(struct kref *kref)
+{ 
+	return atomic_add_unless(&kref->refcount, 1, 0); 
+}
+#define kref_get_unless_zero ksu_kref_get_unless_zero
+#endif // < 3.9
 
 /**
  *  kver agnostic workaround for < 3.14's CONFIG_UIDGID_STRICT_TYPE_CHECKS=n

@@ -38,6 +38,7 @@
 #include "infra/event_queue.h"
 #include "feature/adb_root.h"
 #include "feature/kernel_umount.h"
+#include "feature/selinux_hide.h"
 #include "feature/sucompat.h"
 #include "feature/sulog.h"
 #include "runtime/ksud.h"
@@ -47,12 +48,17 @@
 #include "selinux/selinux.h"
 #include "selinux/sepolicy.h"
 
+#ifdef CONFIG_ARM64
+#include "arm64_bl_insn.h"
+#endif
+
 // unity build
 #include "tiny_sulog.c"
 #include "policy/allowlist.c"
 #include "policy/app_profile.c"
 #include "policy/feature.c"
 #include "manager/apk_sign.c"
+#include "manager/pkg_observer.c"
 #include "manager/throne_tracker.c"
 
 #include "supercall/perm.c"
@@ -65,6 +71,7 @@
 
 #include "feature/adb_root.c"
 #include "feature/kernel_umount.c"
+#include "feature/selinux_hide.c"
 #include "feature/sucompat.c"
 #include "feature/sulog.c"
 #include "runtime/ksud.c"
@@ -72,7 +79,19 @@
 #include "sulog/event.c"
 #include "sulog/fd.c"
 
-#include "hook/core_hook.c"	// lsm
+#include "hook/setuid_hook.c"
+
+#ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	#include "hook/lsm_hooks_static.c"
+	#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0)
+	#include "hook/lsm_hooks_list.c"
+	#else
+	#include "hook/lsm_hooks_ultralegacy.c"
+	#endif
+#else
+	#include "hook/lsm_hooks_manual.c"
+#endif
 
 #include "selinux/selinux.c"
 #include "selinux/sepolicy.c"
@@ -80,23 +99,19 @@
 
 #ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
 #ifdef CONFIG_ARM64
-#include "hook/syscall_table_hook_arm64.c"
-#elif CONFIG_ARM
-#include "hook/syscall_table_hook_arm.c"
+	#include "hook/syscall_table_hook_arm64.c"
+#elif defined(CONFIG_ARM)
+	#include "hook/syscall_table_hook_arm.c"
 #endif
+#endif /* CONFIG_KSU_TAMPER_SYSCALL_TABLE */
+
+#ifdef CONFIG_KSU_HACK_ARM64_BRANCH_LINK
+#include "hook/branch_link_hook_arm64.c"
 #endif
 
 #if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
 #include "hook/kp_ksud.c"
 #endif
-
-#ifdef CONFIG_KSU_EXTRAS
-#include "extras.c"
-#endif
-
-#ifdef CONFIG_KSU_SUSFS
-#include <linux/susfs.h>
-#endif // #ifdef CONFIG_KSU_SUSFS
 
 // __weak fn's
 #include "kernel_compat.c"
@@ -133,15 +148,20 @@ extern void ksu_supercalls_init();
 #else
 	#define FEAT_5 ""
 #endif
-#if defined(KSU_COMPAT_HAS_EXPORTED_POLICY_RWLOCK)
-	#define FEAT_6 " +policy_rwlock"
+#if defined(CONFIG_KSU_HACK_ARM64_BRANCH_LINK)
+	#define FEAT_6 " +arm64_branch_link"
 #else
 	#define FEAT_6 ""
 #endif
+#if defined(KSU_COMPAT_HAS_EXPORTED_POLICY_RWLOCK)
+	#define FEAT_7 " +policy_rwlock"
+#else
+	#define FEAT_7 ""
+#endif
 
-#define EXTRA_FEATURES FEAT_1 FEAT_2 FEAT_3 FEAT_4 FEAT_5 FEAT_6
+#define EXTRA_FEATURES FEAT_1 FEAT_2 FEAT_3 FEAT_4 FEAT_5 FEAT_6 FEAT_7
 
-int __init kernelsu_init(void)
+static int __init kernelsu_init(void)
 {
 	pr_info("Initialized on: %s (%s) with ksuver: %s%s\n", UTS_RELEASE, UTS_MACHINE, __stringify(KSU_VERSION), EXTRA_FEATURES);
 
@@ -176,15 +196,17 @@ int __init kernelsu_init(void)
 	ksu_adb_root_init(); // so the feature is registered
 #endif
 
+	ksu_selinux_hide_init(); // so the feature is registered
+
 	ksu_core_init();
+
+#if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
+	kp_ksud_init();
+#endif
 
 	ksu_allowlist_init();
 
 	ksu_throne_tracker_init();
-
-#ifdef CONFIG_KSU_SUSFS
-    	susfs_init();
-#endif // #ifdef CONFIG_KSU_SUSFS
 
 	ksu_ksud_init();
 
@@ -194,12 +216,12 @@ int __init kernelsu_init(void)
 	ksu_syscall_table_hook_init();
 #endif
 
-#if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
-	kp_ksud_init();
+#ifdef CONFIG_KSU_HACK_ARM64_BRANCH_LINK
+	ksu_branch_link_patch_init();
 #endif
 
-#ifdef CONFIG_KSU_EXTRAS
-	ksu_avc_spoof_init(); // so the feature is registered
+#ifdef CONFIG_KSU_SUSFS
+	susfs_init();
 #endif
 
 	return 0;
