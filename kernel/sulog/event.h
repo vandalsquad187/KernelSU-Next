@@ -4,7 +4,7 @@
 #include <linux/compiler_types.h>
 #include <linux/gfp.h>
 #include <linux/types.h>
-#include "uapi/sulog.h" // IWYU pragma: keep
+#include "../../uapi/sulog.h" // IWYU pragma: keep
 
 struct ksu_event_queue;
 struct ksu_sulog_pending_event;
