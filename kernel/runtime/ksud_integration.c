@@ -19,6 +19,10 @@
 #include <linux/workqueue.h>
 #include <linux/uio.h>
 #include <linux/stat.h>
+#include "kernel_compat.h"
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+#define strncpy_from_user_nofault strncpy_from_user
+#endif
 
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep

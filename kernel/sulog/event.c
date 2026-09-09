@@ -13,6 +13,10 @@
 #if defined(__x86_64__) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
 #include <linux/mm.h>
 #endif
+#include "kernel_compat.h"
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+#define strncpy_from_user_nofault strncpy_from_user
+#endif
 
 #include "feature/sulog.h"
 #include "infra/event_queue.h"
