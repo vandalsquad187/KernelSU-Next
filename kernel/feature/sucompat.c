@@ -5,6 +5,7 @@
 #include <linux/preempt.h>
 #include <linux/printk.h>
 #include <linux/mm.h>
+#include <linux/version.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
 #include <linux/pgtable.h>
 #endif
@@ -13,7 +14,6 @@
 #include <linux/cred.h>
 #include <linux/fs.h>
 #include <linux/types.h>
-#include <linux/version.h>
 #include <linux/sched/task_stack.h>
 #include <linux/ptrace.h>
 
@@ -28,6 +28,10 @@
 #include "supercall/supercall.h"
 #include "sulog/event.h"
 #include "ksu.h"
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+#define strncpy_from_user_nofault strncpy_from_user
+#endif
+
 #include "util.h"
 
 #define SU_PATH "/system/bin/su"
