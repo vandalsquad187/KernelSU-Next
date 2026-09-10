@@ -1,6 +1,12 @@
 #ifndef __KSU_H_UID_OBSERVER
 #define __KSU_H_UID_OBSERVER
 
+#include <linux/dcache.h>
+#include <linux/fs.h>
+#include <linux/namei.h>
+#include <linux/printk.h>
+#include <linux/types.h>
+
 void ksu_throne_tracker_init();
 
 void ksu_throne_tracker_exit();
