@@ -102,7 +102,7 @@ int ksu_lsm_hook(struct ksu_lsm_hook *hook)
     size_t i;
 #else
     unsigned long heads_addr;
-    struct hlist_head *head;
+    struct list_head *head;
     struct security_hook_list *selected_entry = NULL;
     void **selected_slot = NULL;
     void *selected_origin = NULL;
