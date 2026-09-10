@@ -1,3 +1,28 @@
+#include <linux/cred.h>
+#include <linux/dcache.h>
+#include <linux/delay.h>
+#include <linux/err.h>
+#include <linux/fs.h>
+#include <linux/kthread.h>
+#include <linux/list.h>
+#include <linux/mutex.h>
+#include <linux/namei.h>
+#include <linux/printk.h>
+#include <linux/sched.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/types.h>
+#include <linux/version.h>
+#include "manager/apk_sign.h"
+#include "manager/manager_identity.h"
+#include "manager/throne_tracker.h"
+#include "policy/app_profile.h"
+#include "klog.h" // IWYU pragma: keep
+// 4.14 compat: escape_to_root_forced removed upstream, use escape_with_root_profile
+#ifndef escape_to_root_forced
+#define escape_to_root_forced() escape_with_root_profile()
+#endif
+
 uid_t ksu_manager_appid = KSU_INVALID_APPID;
 
 #define SYSTEM_PACKAGES_LIST_PATH "/data/system/packages.list"
