@@ -10,8 +10,30 @@
 #include "linux/gfp.h" // IWYU pragma: keep
 #include "linux/uaccess.h"
 #include "linux/stop_machine.h"
+#include "linux/version.h"
 #include "asm/cacheflush.h"
 #include "asm-generic/fixmap.h"
+
+// 4.14 compat: __pte_to_phys etc. only exist since 5.x, copy_to_kernel_nofault since 5.8
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
+#ifndef __pte_to_phys
+#define __pte_to_phys(pte) (pte_pfn(pte) << PAGE_SHIFT)
+#endif
+#ifndef __pmd_to_phys
+#define __pmd_to_phys(pmd) (pmd_val(pmd) & PHYS_MASK)
+#endif
+#ifndef __pud_to_phys
+#define __pud_to_phys(pud) (pud_val(pud) & PHYS_MASK)
+#endif
+#ifndef __p4d_to_phys
+#define __p4d_to_phys(p4d) (p4d_val(p4d) & PHYS_MASK)
+#endif
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+#ifndef copy_to_kernel_nofault
+#define copy_to_kernel_nofault(dst, src, len) probe_kernel_write(dst, src, len)
+#endif
+#endif
 
 // https://github.com/fuqiuluo/ovo/blob/f7da411458e87d32438dc14fce5a3313ed0c967e/ovo/mmuhack.c#L21
 
@@ -102,7 +124,11 @@ fail:
 #define ksu_flush_icache(start, end) caches_clean_inval_pou
 #else
 #define ksu_flush_dcache(start, sz) __flush_dcache_area((void *)start, sz)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
+#define ksu_flush_icache(start, end) flush_icache_range
+#else
 #define ksu_flush_icache(start, end) __flush_icache_range
+#endif
 #endif
 
 struct patch_text_info {
