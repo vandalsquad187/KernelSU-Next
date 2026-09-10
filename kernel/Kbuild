@@ -141,6 +141,9 @@ $(info -- KernelSU-Next Manager signature hash: $(KSU_NEXT_MANAGER_HASH))
 
 ccflags-y += -DEXPECTED_MANAGER_SIZE=$(KSU_NEXT_MANAGER_SIZE)
 ccflags-y += -DEXPECTED_MANAGER_HASH=\"$(KSU_NEXT_MANAGER_HASH)\"
+# 4.14 compat: apk_sign.c still uses old EXPECTED_SIZE/HASH names (from monolithic Makefile era)
+ccflags-y += -DEXPECTED_SIZE=$(KSU_NEXT_MANAGER_SIZE)
+ccflags-y += -DEXPECTED_HASH=\"$(KSU_NEXT_MANAGER_HASH)\"
 
 ccflags-y += -DKSU_NEW_DCACHE_FLUSH=$(KSU_NEW_DCACHE_FLUSH)
 
