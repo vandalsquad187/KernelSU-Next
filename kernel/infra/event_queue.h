@@ -8,7 +8,15 @@
 #include <linux/poll.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
+#include <linux/version.h>
 #include <linux/wait.h>
+
+// 4.14 compat: __poll_t only since 5.x
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
+#ifndef __poll_t
+typedef unsigned int __poll_t;
+#endif
+#endif
 
 #define KSU_EVENT_RECORD_FLAG_INTERNAL (1U << 0)
 #define KSU_EVENT_QUEUE_TYPE_DROPPED ((__u16)0xFFFF)
