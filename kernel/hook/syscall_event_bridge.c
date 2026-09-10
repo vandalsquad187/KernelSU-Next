@@ -2,6 +2,7 @@
 #include "linux/cred.h"
 #include "linux/jump_label.h"
 #include "linux/printk.h"
+#include "linux/uaccess.h"
 #include "selinux/selinux.h"
 #include <asm/syscall.h>
 #include <linux/ptrace.h>
