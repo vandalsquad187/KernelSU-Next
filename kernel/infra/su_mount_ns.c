@@ -17,6 +17,8 @@
 #include <uapi/linux/mount.h>
 #else
 #include <linux/mount.h>
+// 4.14 compat: ksys_* wrappers only since 5.0
+#define ksys_unshare(flags) sys_unshare(flags)
 #endif
 
 #include "arch.h"
