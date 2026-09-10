@@ -87,6 +87,10 @@ FILLDIR_RETURN_TYPE my_actor(struct dir_context *ctx, const char *name,
 {
 	struct my_dir_context *my_ctx =
 		container_of(ctx, struct my_dir_context, ctx);
+
+	// we put the apk path we collected here
+	char *candidate_path = (char *)my_ctx->private_data;
+
 	char dirpath[DATA_PATH_LEN];
 
 	if (!my_ctx) {
@@ -125,16 +129,9 @@ FILLDIR_RETURN_TYPE my_actor(struct dir_context *ctx, const char *name,
 		strscpy(data->dirpath, dirpath, DATA_PATH_LEN);
 		data->depth = my_ctx->depth - 1;
 		list_add_tail(&data->list, my_ctx->data_path_list);
-	} else {
-		if ((namelen == 8) && (strncmp(name, "base.apk", namelen) == 0)) {
-			struct apk_path_hash *pos, *n;
-			unsigned int hash = full_name_hash(NULL, dirpath, strlen(dirpath));
-			list_for_each_entry (pos, &apk_path_hash_list, list) {
-				if (hash == pos->hash) {
-					pos->exists = true;
-					return FILLDIR_ACTOR_CONTINUE;
-				}
-			}
+
+		return FILLDIR_ACTOR_CONTINUE;
+	}
 
 	// now put this on candidate_path
 	if (d_type == DT_REG && namelen == 8 && !memcmp(name, "base.apk", 8)) {
