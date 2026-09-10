@@ -6,6 +6,18 @@
  * as for throne tracker, we just async it by hand
  * by offloading it to a kthread.
  */
+#include <linux/cred.h>
+#include <linux/dcache.h>
+#include <linux/err.h>
+#include <linux/fs.h>
+#include <linux/namei.h>
+#include <linux/printk.h>
+#include <linux/sched.h>
+#include <linux/string.h>
+#include <linux/types.h>
+#include <linux/version.h>
+#include "manager/throne_tracker.h"
+#include "klog.h" // IWYU pragma: keep
 
 static uintptr_t system_dir_inode_ptr = NULL;
 
