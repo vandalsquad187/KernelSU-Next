@@ -125,9 +125,9 @@ fail:
 #else
 #define ksu_flush_dcache(start, sz) __flush_dcache_area((void *)start, sz)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
-#define ksu_flush_icache(start, end) flush_icache_range
+#define ksu_flush_icache(start, end) flush_icache_range(start, end)
 #else
-#define ksu_flush_icache(start, end) __flush_icache_range
+#define ksu_flush_icache(start, end) __flush_icache_range(start, end)
 #endif
 #endif
 

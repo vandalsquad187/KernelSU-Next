@@ -16,7 +16,7 @@ else ifeq ($(CONFIG_X86_64),y)
 kernelsu-objs += hook/x86_64/patch_memory.o
 kernelsu-objs += hook/x86_64/syscall_hook.o
 endif
-kernelsu-objs += extras.o
+# extras.o removed: extras.c deleted upstream (avc spoof replaced by selinux_hide), stale ref breaks 4.14 build (No rule extras.o)
 
 kernelsu-objs += infra/file_wrapper.o
 kernelsu-objs += infra/event_queue.o
