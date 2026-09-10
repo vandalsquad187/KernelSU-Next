@@ -8,6 +8,22 @@
 #include "klog.h" // IWYU pragma: keep
 #include "infra/seccomp_cache.h"
 
+// 4.14 compat: SECCOMP_ARCH_NATIVE_NR + internal seccomp_filter layout only exist on 5.x+.
+// On 4.14 provide no-op stubs (cache optimization not critical for root).
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
+void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr)
+{
+    (void)filter;
+    (void)nr;
+}
+
+void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
+{
+    (void)filter;
+    (void)nr;
+}
+#else
+
 struct action_cache {
 	DECLARE_BITMAP(allow_native, SECCOMP_ARCH_NATIVE_NR);
 #ifdef SECCOMP_ARCH_COMPAT
@@ -63,3 +79,4 @@ void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
     }
 #endif
 }
+#endif
