@@ -5,6 +5,7 @@
 #include "linux/version.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
+#include "../kernel_compat.h"
 
 /*
  * Cached SID values for frequently checked contexts.
