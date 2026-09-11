@@ -16,7 +16,10 @@
 #include "manager/apk_sign.h"
 #include "manager/manager_identity.h"
 #include "manager/throne_tracker.h"
+#include "policy/allowlist.h"
 #include "policy/app_profile.h"
+#include "uapi/app_profile.h"
+#include "../kernel_compat.h"
 #include "klog.h" // IWYU pragma: keep
 // 4.14 compat: escape_to_root_forced removed upstream, use escape_with_root_profile
 #ifndef escape_to_root_forced
