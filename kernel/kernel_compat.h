@@ -1,6 +1,10 @@
 #ifndef __KSU_H_KERNEL_COMPAT
 #define __KSU_H_KERNEL_COMPAT
 
+#include <linux/compat.h>
+#include <linux/fs.h>
+#include <linux/uaccess.h>
+
 #if defined(CONFIG_KEYS) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
 extern int install_session_keyring_to_cred(struct cred *cred, struct key *keyring);
 static struct key *init_session_keyring = NULL;
