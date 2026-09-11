@@ -12,6 +12,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/types.h>
+#include <linux/uaccess.h>
 #include <linux/version.h>
 #include "manager/apk_sign.h"
 #include "manager/manager_identity.h"
