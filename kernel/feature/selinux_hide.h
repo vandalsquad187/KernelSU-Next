@@ -1,6 +1,12 @@
 #ifndef __KSU_H_SELINUX_HIDE
 #define __KSU_H_SELINUX_HIDE
 
+#include <linux/cache.h>
+#include <linux/mutex.h>
+#include <linux/printk.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/types.h>
 #include "../../uapi/selinux.h"
 
 void ksu_selinux_hide_init();
