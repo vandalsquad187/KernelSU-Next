@@ -1,3 +1,29 @@
+#include <linux/cred.h>
+#include <linux/dcache.h>
+#include <linux/err.h>
+#include <linux/fs.h>
+#include <linux/list.h>
+#include <linux/mount.h>
+#include <linux/mutex.h>
+#include <linux/namei.h>
+#include <linux/printk.h>
+#include <linux/sched.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/types.h>
+#include <linux/uaccess.h>
+#include <linux/version.h>
+#include "uapi/supercall.h"
+#include "klog.h" // IWYU pragma: keep
+#include "ksu.h"
+#include "../kernel_compat.h"
+#include "policy/allowlist.h"
+#include "policy/app_profile.h"
+#include "manager/manager_identity.h"
+#include "selinux/selinux.h"
+#include "sulog/event.h"
+#include "supercall/supercall.h"
+
 static int do_grant_root(void __user *arg)
 {
     int ret;
