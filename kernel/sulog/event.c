@@ -1,3 +1,4 @@
+#include <linux/version.h>
 #include <asm/current.h>
 #include <linux/compat.h>
 #include <linux/cred.h>
@@ -13,7 +14,6 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 
-#include <linux/version.h>
 #if defined(__x86_64__) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
 #include <linux/mm.h>
 #endif
@@ -25,6 +25,7 @@
 #include "feature/sulog.h"
 #include "infra/event_queue.h"
 #include "klog.h" // IWYU pragma: keep
+#include "selinux/selinux.h"
 #include "sulog/event.h"
 
 #define KSU_SULOG_MAX_QUEUED 256U
@@ -33,6 +34,9 @@
 #define KSU_SULOG_MAX_ARG_CHUNK 256U
 #define KSU_SULOG_MAX_FILENAME_LEN 256U
 
+// 4.14 compat: canonical def in kernel_compat.h, avoid redefinition
+#ifndef KSU_USER_ARG_PTR_DEFINED
+#define KSU_USER_ARG_PTR_DEFINED
 struct user_arg_ptr {
 #ifdef CONFIG_COMPAT
     bool is_compat;
@@ -44,6 +48,7 @@ struct user_arg_ptr {
 #endif
     } ptr;
 };
+#endif
 
 static struct ksu_event_queue sulog_queue;
 
