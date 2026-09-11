@@ -12,6 +12,11 @@
 void ksu_selinux_hide_init();
 void ksu_selinux_hide_exit();
 
+// 4.14 compat: backup/post_fs_data logic only on 5.x+ upstream, no-op stubs for 4.14
+// (old hide path via transaction_write needs no backup management)
+static inline void ksu_selinux_hide_handle_post_fs_data(void) {}
+static inline void ksu_selinux_hide_drop_backup_if_unused(void) {}
+
 static int sepol_expected_argc(u32 cmd);
 
 // its all push, no pop, so we can realloc forever
