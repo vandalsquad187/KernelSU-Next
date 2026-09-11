@@ -8,6 +8,7 @@
 #include <linux/namei.h>
 #include <linux/printk.h>
 #include <linux/sched.h>
+#include <linux/sched/task.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/types.h>
@@ -22,7 +23,10 @@
 #include "manager/manager_identity.h"
 #include "selinux/selinux.h"
 #include "sulog/event.h"
+#include "sulog/fd.h"
 #include "supercall/supercall.h"
+#include "supercall/internal.h"
+#include "feature/kernel_umount.h"
 
 static int do_grant_root(void __user *arg)
 {
@@ -765,45 +769,6 @@ static int do_disable_escape_to_root(void __user *arg)
 {
     set_thread_flag(TIF_KSU_DISABLE_ESCAPE_WITH_ROOT);
     return 0;
-}
-
-static int do_get_hook_mode(void __user *arg)
-{
-	struct ksu_get_hook_mode_cmd cmd = {0};
-	const char *type = "Kprobes";
-
-#ifndef KSU_KPROBES_HOOK
-	type = "Manual";
-#endif
-
-	strscpy(cmd.mode, type, sizeof(cmd.mode));
-
-	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
-		pr_err("get_hook_mode: copy_to_user failed\n");
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
-static int do_get_version_tag(void __user *arg)
-{
-	struct ksu_get_version_tag_cmd cmd = {0};
-
-	strscpy(cmd.tag, KERNEL_SU_VERSION_TAG, sizeof(cmd.tag));
-
-	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
-		pr_err("get_version_tag: copy_to_user failed\n");
-		return -EFAULT;
-	}
-
-	return 0;
-}
-
-static int do_disable_escape_to_root(void __user *arg)
-{
-	set_thread_flag(TIF_KSU_DISABLE_ESCAPE_WITH_ROOT);
-	return 0;
 }
 
 // IOCTL handlers mapping table
