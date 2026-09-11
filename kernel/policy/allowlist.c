@@ -10,8 +10,11 @@
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/printk.h>
+#include <linux/sched.h>
+#include <linux/sched/task.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/version.h>
 #include <linux/compiler_types.h>
 #include <linux/hashtable.h>
 #include <linux/kref.h>
@@ -21,8 +24,21 @@
 #include "runtime/ksud_boot.h"
 #include "selinux/selinux.h"
 #include "policy/allowlist.h"
+#include "policy/app_profile.h"
 #include "manager/manager_identity.h"
 #include "infra/su_mount_ns.h"
+// 4.14 compat: escape_to_root_forced removed upstream, fallthrough/TWA_* only 5.x+
+#ifndef escape_to_root_forced
+#define escape_to_root_forced() escape_with_root_profile()
+#endif
+#ifndef fallthrough
+#define fallthrough do {} while (0)
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
+#ifndef TWA_RESUME
+#define TWA_RESUME true
+#endif
+#endif
 
 #define FILE_MAGIC 0x7f4b5355 // ' KSU', u32
 #define FILE_FORMAT_VERSION 4 // u32
@@ -372,32 +388,6 @@ void ksu_put_root_profile(struct root_profile *profile)
 	put_perm_data(p);
 }
 
-struct root_profile *ksu_get_root_profile(uid_t uid)
-{
-	struct perm_data *p = NULL;
-	u16 i = 0, j = 0;
-	int iter;
-	rcu_read_lock();
-	hash_for_each_rcu (allow_list, iter, p, list) {
-		// pr_info("get_allow_list uid: %d allow: %d\n", p->uid, p->allow);
-		if (p->profile.allow_su == allow && !is_uid_manager(p->profile.curr_uid)) {
-			if (j < length) {
-				array[j++] = p->profile.curr_uid;
-			}
-			++i;
-		}
-	}
-	rcu_read_unlock();
-	if (out_length) {
-		*out_length = j;
-	}
-	if (out_total) {
-		*out_total = i;
-	}
-
-	return true;
-}
-
 static void do_persistent_allow_list()
 {
 	u32 magic = FILE_MAGIC;
@@ -516,31 +506,6 @@ static void migrate_profile(u32 version, struct app_profile *profile)
     }
 
     profile->version = KSU_APP_PROFILE_VER;
-}
-
-static void migrate_profile(u32 version, struct app_profile *profile)
-{
-	char *domain;
-	static const size_t domain_len = sizeof(profile->rp_config.profile.selinux_domain);
-
-	switch (version) {
-	case 2:
-		if (profile->allow_su) {
-			domain = profile->rp_config.profile.selinux_domain;
-			if (strncmp(domain, "u:r:su:s0", domain_len) == 0) {
-				strscpy_pad(domain, KSU_DEFAULT_SELINUX_DOMAIN, domain_len);
-				pr_info("migrated domain of profile: %s\n", profile->key);
-			}
-		}
-		fallthrough;
-	case 3:
-		if (profile->allow_su) {
-			profile->rp_config.profile.flags = FLAG_KSU_NO_NEW_PRIVS;
-		}
-		break;
-	}
-
-	profile->version = KSU_APP_PROFILE_VER;
 }
 
 void ksu_load_allow_list()
