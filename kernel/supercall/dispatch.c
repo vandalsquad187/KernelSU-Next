@@ -14,12 +14,15 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
+#include "uapi/app_profile.h"
+#include "uapi/feature.h"
 #include "uapi/supercall.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
 #include "../kernel_compat.h"
 #include "policy/allowlist.h"
 #include "policy/app_profile.h"
+#include "policy/feature.h"
 #include "manager/manager_identity.h"
 #include "selinux/selinux.h"
 #include "sulog/event.h"
@@ -27,6 +30,9 @@
 #include "supercall/supercall.h"
 #include "supercall/internal.h"
 #include "feature/kernel_umount.h"
+#include "hook/tp_marker.h"
+#include "runtime/ksud_boot.h"
+#include "infra/file_wrapper.h"
 
 static int do_grant_root(void __user *arg)
 {
@@ -103,24 +109,6 @@ static int do_get_info_legacy(void __user *arg)
     }
 
     return 0;
-}
-
-static int do_get_info_legacy(void __user *arg)
-{
-	struct ksu_get_info_legacy_cmd cmd = { .version = KERNEL_SU_VERSION, .flags = 0 };
-
-	// NOTE: we do not have LKM support so we don't bother with its flags or late-load
-	if (is_manager()) {
-		cmd.flags |= KSU_GET_INFO_FLAG_MANAGER;
-	}
-	cmd.features = KSU_FEATURE_MAX;
-
-	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
-		pr_err("get_version: copy_to_user failed\n");
-		return -EFAULT;
-	}
-
-	return 0;
 }
 
 static int do_report_event(void __user *arg)

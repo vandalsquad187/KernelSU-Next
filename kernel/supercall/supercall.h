@@ -21,4 +21,8 @@ int ksu_install_fd(void);
 
 void ksu_supercalls_init(void);
 void ksu_supercalls_exit(void);
+
+// extensions (restored from k6a-sweet for 4.14 try_umount list API)
+#define KSU_UMOUNT_GETSIZE 107   // get list size
+#define KSU_UMOUNT_GETLIST 108   // get list
 #endif // __KSU_H_SUPERCALL
