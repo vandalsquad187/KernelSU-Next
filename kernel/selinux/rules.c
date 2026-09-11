@@ -19,8 +19,16 @@
 #include "ss/services.h"
 #include "linux/lsm_audit.h" // IWYU pragma: keep
 #include "xfrm.h"
+#include <linux/stop_machine.h>
 #include "../kernel_compat.h"
 #include "feature/selinux_hide.h"
+
+// 4.14 compat: use selinux_state.ss path (2-arg avc/status APIs), not 1-arg 5.x+ path
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+#ifndef KSU_COMPAT_USE_SELINUX_STATE
+#define KSU_COMPAT_USE_SELINUX_STATE 1
+#endif
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 #define SELINUX_POLICY_INSTEAD_SELINUX_SS
