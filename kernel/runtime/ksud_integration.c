@@ -59,6 +59,9 @@ static void stop_execve_hook();
 static struct work_struct stop_input_hook_work;
 
 #define MAX_ARG_STRINGS 0x7FFFFFFF
+// 4.14 compat: struct user_arg_ptr canonical def in kernel_compat.h, avoid redefinition
+#ifndef KSU_USER_ARG_PTR_DEFINED
+#define KSU_USER_ARG_PTR_DEFINED
 struct user_arg_ptr {
 #ifdef CONFIG_COMPAT
     bool is_compat;
@@ -70,6 +73,7 @@ struct user_arg_ptr {
 #endif
     } ptr;
 };
+#endif
 
 static const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr)
 {
