@@ -22,7 +22,13 @@ int ksu_install_fd(void);
 void ksu_supercalls_init(void);
 void ksu_supercalls_exit(void);
 
-// extensions (restored from k6a-sweet for 4.14 try_umount list API)
+// extensions (restored from k6a-sweet for 4.14)
+#define CHANGE_MANAGER_UID 10006
 #define KSU_UMOUNT_GETSIZE 107   // get list size
 #define KSU_UMOUNT_GETLIST 108   // get list
+#define GET_SULOG_DUMP 10009     // get sulog dump, max, last 100 escalations
+#define GET_SULOG_DUMP_V2 10010  // get sulog dump, timestamped, last 250 escalations
+#define CHANGE_KSUVER 10011      // change ksu version
+#define CHANGE_SPOOF_UNAME 10012 // spoof uname
+#define CHANGE_KSUFLAGS 10013    // change ksuflags
 #endif // __KSU_H_SUPERCALL

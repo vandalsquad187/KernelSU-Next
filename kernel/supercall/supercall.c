@@ -12,6 +12,7 @@
 #include <linux/version.h>
 #include <linux/utsname.h> // utsname() and uts_sem
 
+#include "uapi/app_profile.h"
 #include "uapi/supercall.h"
 #include "supercall/internal.h"
 #include "arch.h"
@@ -26,6 +27,26 @@
 #include <linux/susfs.h>
 #include "objsec.h"
 #endif // #ifdef CONFIG_KSU_SUSFS
+
+// 4.14 compat: close_fd/TWA_RESUME only 5.x+, overrides/tiny_dump legacy
+#include <linux/syscalls.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
+#ifndef close_fd
+#define close_fd(fd) sys_close(fd)
+#endif
+#ifndef TWA_RESUME
+#define TWA_RESUME true
+#endif
+#endif
+uint32_t ksuver_override = 0;
+static uint32_t ksuflags_override = 0;
+// tiny_sulog.o not in split Kbuild (legacy dump superseded by sulog/event+fd)
+static inline int send_sulog_dump(void __user *uptr)
+{
+	(void)uptr;
+	return 1;
+}
+static inline void tiny_sulog_init_heap(void) {}
 
 static int anon_ksu_release(struct inode *inode, struct file *filp)
 {
