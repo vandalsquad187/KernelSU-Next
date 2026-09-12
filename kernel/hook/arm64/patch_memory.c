@@ -11,7 +11,13 @@
 #include "linux/uaccess.h"
 #include "linux/stop_machine.h"
 #include "linux/version.h"
+#include "linux/mm.h"
+#include "linux/vmalloc.h"
+#include "linux/string.h"
+#include "linux/preempt.h"
+#include "linux/irqflags.h"
 #include "asm/cacheflush.h"
+#include "asm/memory.h"
 #include "asm-generic/fixmap.h"
 
 // 4.14 compat: __pte_to_phys etc. only exist since 5.x, copy_to_kernel_nofault since 5.8
@@ -216,8 +222,56 @@ static int ksu_patch_text_cb(void *arg)
     return ret;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
+// 4.14: proven vmap-alias write (v1.3.1 read_and_replace_syscall logic).
+// No fixmap pagewalk, no stop_machine: preempt+irq off, like the proven path.
+static int ksu_patch_text_nosync_414(void *dst, void *src, size_t len, int flags)
+{
+    unsigned long addr = (unsigned long)dst;
+    unsigned long base = addr & PAGE_MASK;
+    unsigned long offset = addr & ~PAGE_MASK;
+    struct page *page;
+    void *writable_addr, *target_slot;
+    int ret = 0;
+
+    if (offset + len > PAGE_SIZE) {
+        pr_err("patch slot crosses page boundary, aborting\n");
+        return -EINVAL;
+    }
+
+    page = phys_to_page(__pa(base));
+    if (!page)
+        return -ENOMEM;
+
+    writable_addr = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
+    if (!writable_addr)
+        return -ENOMEM;
+
+    target_slot = (void *)((unsigned long)writable_addr + offset);
+
+    preempt_disable();
+    local_irq_disable();
+    memcpy(target_slot, src, len);
+    smp_mb();
+    if (flags & KSU_PATCH_TEXT_FLUSH_DCACHE)
+        ksu_flush_dcache(dst, len);
+    if (flags & KSU_PATCH_TEXT_FLUSH_ICACHE)
+        ksu_flush_icache((uintptr_t)dst, (uintptr_t)dst + len);
+    local_irq_enable();
+    preempt_enable();
+
+    vunmap(writable_addr);
+    smp_mb();
+    pr_info("patch dst=0x%lx len=%zu ok\n", addr, len);
+    return ret;
+}
+#endif
+
 int ksu_patch_text(void *dst, void *src, size_t len, int flags)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
+    return ksu_patch_text_nosync_414(dst, src, len, flags);
+#else
     struct patch_text_info info = {
         .dst = dst,
         .src = src,
@@ -227,6 +281,7 @@ int ksu_patch_text(void *dst, void *src, size_t len, int flags)
     };
 
     return stop_machine(ksu_patch_text_cb, &info, cpu_online_mask);
+#endif
 }
 
 #endif /* __aarch64__ */
