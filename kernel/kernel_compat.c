@@ -1,3 +1,11 @@
+#include <linux/version.h>
+#include <linux/dcache.h>
+#include <linux/err.h>
+#include <linux/fs.h>
+#include <linux/printk.h>
+#include <linux/syscalls.h>
+#include <linux/uaccess.h>
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
 __weak long copy_from_kernel_nofault(void *dst, const void *src, size_t size)
 {
