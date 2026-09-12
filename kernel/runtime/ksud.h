@@ -12,4 +12,7 @@ void ksu_execve_hook_ksud(const struct pt_regs *regs);
 void ksu_execveat_hook_ksud(const struct pt_regs *regs);
 void ksu_stop_input_hook_runtime(void);
 
+// shared with feature/selinux_hide.c (split build needs extern, unity TU shared static)
+extern bool ksu_input_hook;
+
 #endif

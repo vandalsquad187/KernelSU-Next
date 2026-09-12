@@ -27,7 +27,8 @@ static void stop_input_hook();
 static bool ksu_module_mounted __read_mostly = false;
 static bool ksu_boot_completed __read_mostly = false;
 static bool ksu_vfs_read_hook __read_mostly = true;
-static bool ksu_input_hook __read_mostly = true;
+// non-static: shared with feature/selinux_hide.c via runtime/ksud.h (split build)
+bool ksu_input_hook __read_mostly = true;
 
 #ifdef KSU_CAN_USE_JUMP_LABEL
 DEFINE_STATIC_KEY_TRUE(ksud_vfs_read_key);

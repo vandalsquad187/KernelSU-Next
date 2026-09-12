@@ -146,6 +146,9 @@ ccflags-y += -DEXPECTED_SIZE=$(KSU_NEXT_MANAGER_SIZE)
 ccflags-y += -DEXPECTED_HASH=\"$(KSU_NEXT_MANAGER_HASH)\"
 
 ccflags-y += -DKSU_NEW_DCACHE_FLUSH=$(KSU_NEW_DCACHE_FLUSH)
+# 4.14 compat: mirrors old monolithic Makefile -DKSU_COMPAT_HAS_SELINUX_STATE
+# (4.14 has struct selinux_state with .ss/.avc members, 2-arg avc/status APIs)
+ccflags-y += -DKSU_COMPAT_HAS_SELINUX_STATE
 
 ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
 ccflags-y += -Wno-declaration-after-statement -Wno-unused-function -Wno-unused-variable

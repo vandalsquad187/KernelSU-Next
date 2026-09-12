@@ -1,10 +1,14 @@
+#include <linux/version.h>
 #include "selinux_hide.h"
 #include "infra/symbol_resolver.h"
 #include "linux/jump_label.h"
 #include "selinux/sepolicy.h"
 #include <linux/cred.h>
 #include <linux/cpu.h>
+#include <linux/delay.h>
 #include <linux/memory.h>
+#include <linux/namei.h>
+#include <linux/sched.h>
 #include <linux/uaccess.h>
 #include <linux/init.h>
 #include <linux/printk.h>
@@ -18,6 +22,11 @@
 #include <security.h>
 #include <ss/context.h>
 #include <ss/services.h>
+#include "arch.h"
+#include "../kernel_compat.h"
+#include "selinux/selinux.h"
+#include "policy/feature.h"
+#include "runtime/ksud.h"
 /**
  *  NOTE: this isnt the fullblown thing like upstream's where we straight up backport
  *  SELinux. This is just questionable to do when we want to support a plethora of
