@@ -258,9 +258,14 @@ void __init ksu_syscall_hook_init(void)
     }
 
     ksu_dispatcher_nr = ni_slot;
+#if 0 // DEBUG4.14 T3: skip patch to isolate write vs rest (temporary)
     ksu_syscall_table_hook(ksu_dispatcher_nr,
                            (syscall_fn_t)ksu_syscall_dispatcher, NULL);
     pr_info("dispatcher installed at slot %d\n", ksu_dispatcher_nr);
+#else
+    pr_info("dispatcher slot %d selected, patch skipped (T3 debug)\n", ni_slot);
+    ksu_dispatcher_nr = -1;
+#endif
 }
 
 void __exit ksu_syscall_hook_exit(void)
