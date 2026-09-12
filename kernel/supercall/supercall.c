@@ -15,6 +15,7 @@
 #include "uapi/app_profile.h"
 #include "uapi/supercall.h"
 #include "supercall/internal.h"
+#include "supercall/supercall.h"
 #include "arch.h"
 #include "util.h"
 #include "klog.h" // IWYU pragma: keep
