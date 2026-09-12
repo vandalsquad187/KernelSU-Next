@@ -6,16 +6,16 @@
 #include <linux/mutex.h>
 #include <linux/syscalls.h>
 #include <asm/cacheflush.h>
+#include <asm/syscall.h>
 #include "infra/symbol_resolver.h"
 #include "../patch_memory.h"
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
 
-// 4.14 non-GKI (e.g. QCOM): sys_call_table hidden from kallsyms, but built-in
-// KSU can reference it directly at link time (no EXPORT needed for built-in).
-#ifndef MODULE
-extern void * const sys_call_table[];
-#endif
+// 4.14 non-GKI (e.g. QCOM): sys_call_table hidden from kallsyms, but
+// arch/arm64/include/asm/syscall.h already declares
+// `extern const void *sys_call_table[]` and built-in KSU links it directly
+// (no EXPORT needed for built-in).
 
 syscall_fn_t *ksu_syscall_table = NULL;
 int ksu_dispatcher_nr = -1;
@@ -226,6 +226,7 @@ void __init ksu_syscall_hook_init(void)
 #ifndef MODULE
     if (!ksu_syscall_table) {
         // 4.14 non-GKI: table hidden from kallsyms, use direct link-time ref
+        // (declared in arch/arm64/include/asm/syscall.h as const void *[])
         ksu_syscall_table = (syscall_fn_t *)sys_call_table;
     }
 #endif
