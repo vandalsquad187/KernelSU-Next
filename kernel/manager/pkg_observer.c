@@ -104,3 +104,14 @@ slow_path:
 	ksu_rename_observer_slow(old_dentry, new_dentry);
 	return;
 }
+
+// 4.14 split build: manager_observer TU never existed (unity era callers in
+// core/init.c/boot_event.c expect these symbols; rename observation lives here)
+#include "manager/manager_observer.h"
+int ksu_observer_init(void)
+{
+	return 0;
+}
+void ksu_observer_exit(void)
+{
+}

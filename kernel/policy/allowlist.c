@@ -388,6 +388,31 @@ void ksu_put_root_profile(struct root_profile *profile)
 	put_perm_data(p);
 }
 
+bool ksu_get_allow_list(int *array, u16 length, u16 *out_length, u16 *out_total, bool allow)
+{
+	struct perm_data *p = NULL;
+	u16 i = 0, j = 0;
+	int iter;
+	rcu_read_lock();
+	hash_for_each_rcu (allow_list, iter, p, list) {
+		if (p->profile.allow_su == allow && !is_uid_manager(p->profile.curr_uid)) {
+			if (j < length) {
+				array[j++] = p->profile.curr_uid;
+			}
+			++i;
+		}
+	}
+	rcu_read_unlock();
+	if (out_length) {
+		*out_length = j;
+	}
+	if (out_total) {
+		*out_total = i;
+	}
+
+	return true;
+}
+
 static void do_persistent_allow_list()
 {
 	u32 magic = FILE_MAGIC;

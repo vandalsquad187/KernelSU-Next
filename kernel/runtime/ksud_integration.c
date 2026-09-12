@@ -33,6 +33,10 @@
 #include "hook/syscall_hook.h"
 #include "hook/syscall_event_bridge.h"
 
+// 4.14 split build: ksu_input_hook lives here (writer ksu_stop_input_hook_runtime
+// is in this TU; runtime/ksud.c is not built). Declared extern in runtime/ksud.h.
+bool ksu_input_hook = true;
+
 // clang-format off
 static const char KERNEL_SU_RC[] =
     "\n"

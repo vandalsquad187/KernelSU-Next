@@ -1,5 +1,8 @@
 kernelsu-objs := core/init.o
 
+# 4.14 split build: compat shims (copy_from_user_nofault, path_mount/umount)
+kernelsu-objs += kernel_compat.o
+
 kernelsu-objs += feature/kernel_umount.o
 kernelsu-objs += feature/sulog.o
 kernelsu-objs += feature/sucompat.o

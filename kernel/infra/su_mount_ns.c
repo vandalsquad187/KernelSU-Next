@@ -31,14 +31,20 @@ extern int path_mount(const char *dev_name, struct path *path,
                       const char *type_page, unsigned long flags,
                       void *data_page);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 #if defined(__aarch64__)
 extern long __arm64_sys_setns(const struct pt_regs *regs);
 #elif defined(__x86_64__)
 extern long __x64_sys_setns(const struct pt_regs *regs);
 #endif
+#endif
 
 static long ksu_sys_setns(int fd, int flags)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
+    // 4.14: direct syscall, no pt_regs wrappers
+    return sys_setns(fd, flags);
+#else
     struct pt_regs regs;
     memset(&regs, 0, sizeof(regs));
 
@@ -51,6 +57,7 @@ static long ksu_sys_setns(int fd, int flags)
     return __x64_sys_setns(&regs);
 #else
 #error "Unsupported arch"
+#endif
 #endif
 }
 

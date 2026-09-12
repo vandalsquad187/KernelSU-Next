@@ -599,3 +599,9 @@ void __exit ksu_selinux_hide_exit()
 	ksu_unregister_feature_handler(KSU_FEATURE_SELINUX_HIDE);
 }
 
+
+// 4.14 split build: avc_spoof translation unit never existed (unity era callers
+// in syscall_hook_manager.c/boot_event.c expect these symbols)
+void __init ksu_avc_spoof_init(void) {}
+void __exit ksu_avc_spoof_exit(void) {}
+void ksu_avc_spoof_late_init(void) {}
