@@ -234,6 +234,7 @@ static int ksu_patch_text_nosync_414(void *dst, void *src, size_t len, int flags
     void *writable_addr, *target_slot;
     int ret = 0;
 
+    (void)flags; // flushes intentionally omitted on 4.14 (v1.3.1 mirror)
     if (offset + len > PAGE_SIZE) {
         pr_err("patch slot crosses page boundary, aborting\n");
         return -EINVAL;
@@ -249,14 +250,11 @@ static int ksu_patch_text_nosync_414(void *dst, void *src, size_t len, int flags
 
     target_slot = (void *)((unsigned long)writable_addr + offset);
 
+    // exact v1.3.1 mirror: no cache flushes (data write only, smp_mb suffices)
     preempt_disable();
     local_irq_disable();
     memcpy(target_slot, src, len);
     smp_mb();
-    if (flags & KSU_PATCH_TEXT_FLUSH_DCACHE)
-        ksu_flush_dcache(dst, len);
-    if (flags & KSU_PATCH_TEXT_FLUSH_ICACHE)
-        ksu_flush_icache((uintptr_t)dst, (uintptr_t)dst + len);
     local_irq_enable();
     preempt_enable();
 
