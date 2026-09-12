@@ -5,6 +5,7 @@
 #include <linux/kallsyms.h>
 #include <linux/mutex.h>
 #include <linux/syscalls.h>
+#include <linux/uaccess.h>
 #include <asm/cacheflush.h>
 #include <asm/syscall.h>
 #include "infra/symbol_resolver.h"
@@ -149,7 +150,11 @@ static int __init ksu_find_ni_syscall_slots(int *out_slots, int max_slots)
         return 0;
 
     for (i = 0; i < __NR_syscalls && count < max_slots; i++) {
-        if ((unsigned long)ksu_syscall_table[i] == ni_syscall) {
+        unsigned long entry = 0;
+        // 4.14 safety: fault-tolerant read, abort cleanly instead of panic
+        if (probe_kernel_read(&entry, (void *)&ksu_syscall_table[i], sizeof(entry)))
+            break;
+        if (entry == ni_syscall) {
             out_slots[count++] = i;
             pr_info("ni_syscall %d: %d\n", count, i);
         }
@@ -237,17 +242,19 @@ void __init ksu_syscall_hook_init(void)
 
 #ifndef MODULE
     // 4.14 safety: cross-check table against link-time sys_read address
-    // (linux/syscalls.h). A wrong table here would corrupt random memory
-    // on patch -> bootloop.
+    // (linux/syscalls.h). Fault-tolerant: abort cleanly instead of panic.
     {
-        if ((unsigned long)ksu_syscall_table[__NR_read] != (unsigned long)&sys_read) {
+        unsigned long read_entry = 0;
+        if (probe_kernel_read(&read_entry, (void *)&ksu_syscall_table[__NR_read],
+                              sizeof(read_entry)) ||
+            read_entry != (unsigned long)&sys_read) {
             pr_err("sys_call_table check failed: [%d]=0x%lx, sys_read=0x%lx, aborting patch\n",
-                   __NR_read, (unsigned long)ksu_syscall_table[__NR_read],
+                   __NR_read, read_entry,
                    (unsigned long)&sys_read);
             ksu_syscall_table = NULL;
             return;
         }
-        pr_info("sys_call_table check ok: read=%pS\n", ksu_syscall_table[__NR_read]);
+        pr_info("sys_call_table check ok: read=%pS\n", (void *)read_entry);
     }
 #endif
 
