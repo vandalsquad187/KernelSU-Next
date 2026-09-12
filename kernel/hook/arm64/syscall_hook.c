@@ -235,6 +235,22 @@ void __init ksu_syscall_hook_init(void)
     if (!ksu_syscall_table)
         return;
 
+#ifndef MODULE
+    // 4.14 safety: cross-check table against link-time sys_read address
+    // (linux/syscalls.h). A wrong table here would corrupt random memory
+    // on patch -> bootloop.
+    {
+        if ((unsigned long)ksu_syscall_table[__NR_read] != (unsigned long)&sys_read) {
+            pr_err("sys_call_table check failed: [%d]=0x%lx, sys_read=0x%lx, aborting patch\n",
+                   __NR_read, (unsigned long)ksu_syscall_table[__NR_read],
+                   (unsigned long)&sys_read);
+            ksu_syscall_table = NULL;
+            return;
+        }
+        pr_info("sys_call_table check ok: read=%pS\n", ksu_syscall_table[__NR_read]);
+    }
+#endif
+
     // Find one ni_syscall slot for the dispatcher
     if (ksu_find_ni_syscall_slots(&ni_slot, 1) < 1) {
         pr_err("failed to find ni_syscall slot for dispatcher\n");
