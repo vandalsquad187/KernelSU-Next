@@ -18,30 +18,7 @@ static inline void ksu_selinux_hide_handle_post_fs_data(void) {}
 static inline void ksu_selinux_hide_drop_backup_if_unused(void) {}
 static inline void ksu_selinux_hide_handle_second_stage(void) {}
 
-static int sepol_expected_argc(u32 cmd)
-{
-	switch (cmd) {
-	case KSU_SEPOLICY_CMD_NORMAL_PERM:
-		return 4;
-	case KSU_SEPOLICY_CMD_XPERM:
-		return 5;
-	case KSU_SEPOLICY_CMD_TYPE_STATE:
-		return 1;
-	case KSU_SEPOLICY_CMD_TYPE:
-	case KSU_SEPOLICY_CMD_TYPE_ATTR:
-		return 2;
-	case KSU_SEPOLICY_CMD_ATTR:
-		return 1;
-	case KSU_SEPOLICY_CMD_TYPE_TRANSITION:
-		return 5;
-	case KSU_SEPOLICY_CMD_TYPE_CHANGE:
-		return 4;
-	case KSU_SEPOLICY_CMD_GENFSCON:
-		return 3;
-	default:
-		return -EINVAL;
-	}
-}
+int sepol_expected_argc(u32 cmd);
 
 // its all push, no pop, so we can realloc forever
 

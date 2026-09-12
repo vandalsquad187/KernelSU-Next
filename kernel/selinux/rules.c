@@ -298,7 +298,8 @@ static int sepol_require_not_all(const char *value, const char *name)
 	return -EINVAL;
 }
 
-static int sepol_expected_argc(u32 cmd)
+// global: shared with feature/selinux_hide.h (split build needs one definition)
+int sepol_expected_argc(u32 cmd)
 {
 	switch (cmd) {
 	case KSU_SEPOLICY_CMD_NORMAL_PERM:
