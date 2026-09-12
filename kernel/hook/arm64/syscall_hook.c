@@ -4,11 +4,18 @@
 
 #include <linux/kallsyms.h>
 #include <linux/mutex.h>
+#include <linux/syscalls.h>
 #include <asm/cacheflush.h>
 #include "infra/symbol_resolver.h"
 #include "../patch_memory.h"
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
+
+// 4.14 non-GKI (e.g. QCOM): sys_call_table hidden from kallsyms, but built-in
+// KSU can reference it directly at link time (no EXPORT needed for built-in).
+#ifndef MODULE
+extern void * const sys_call_table[];
+#endif
 
 syscall_fn_t *ksu_syscall_table = NULL;
 int ksu_dispatcher_nr = -1;
@@ -126,6 +133,15 @@ static int __init ksu_find_ni_syscall_slots(int *out_slots, int max_slots)
         return 0;
 
     ni_syscall = (unsigned long)ksu_resolve_symbol_for_functable_hook("__arm64_sys_ni_syscall");
+    if (!ni_syscall)
+        ni_syscall = (unsigned long)ksu_resolve_symbol_for_functable_hook("sys_ni_syscall");
+#ifndef MODULE
+    if (!ni_syscall) {
+        // 4.14: generic sys_ni_syscall fills unused slots, direct link-time ref
+        extern long sys_ni_syscall(void);
+        ni_syscall = (unsigned long)&sys_ni_syscall;
+    }
+#endif
 
     pr_info("sys_ni_syscall: 0x%lx\n", ni_syscall);
 
@@ -207,6 +223,12 @@ void __init ksu_syscall_hook_init(void)
     memset(syscall_hooks, 0, sizeof(syscall_hooks));
 
     ksu_syscall_table = (syscall_fn_t *)ksu_resolve_symbol_for_functable_hook("sys_call_table");
+#ifndef MODULE
+    if (!ksu_syscall_table) {
+        // 4.14 non-GKI: table hidden from kallsyms, use direct link-time ref
+        ksu_syscall_table = (syscall_fn_t *)sys_call_table;
+    }
+#endif
     pr_info("sys_call_table=0x%lx", (unsigned long)ksu_syscall_table);
 
     if (!ksu_syscall_table)
