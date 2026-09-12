@@ -139,6 +139,9 @@ void __init ksu_syscall_hook_manager_init(void)
     ksu_register_syscall_hook(__NR_faccessat, ksu_hook_faccessat);
 
 #ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
+    // DEBUG4.14: skip tracepoint redirect to isolate patch-write vs first-redirect
+    // (T2: patch applied, never redirected). Remove after diagnosis.
+#if 0
     ret = register_trace_sys_enter(ksu_sys_enter_handler, NULL);
 #ifndef CONFIG_KRETPROBES
     ksu_mark_running_process_locked();
@@ -148,6 +151,8 @@ void __init ksu_syscall_hook_manager_init(void)
     } else {
         pr_info("hook_manager: sys_enter tracepoint registered\n");
     }
+#endif // DEBUG4.14 T2
+    (void)ret;
 #endif
 
     ksu_setuid_hook_init();
