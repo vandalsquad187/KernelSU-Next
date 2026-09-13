@@ -280,3 +280,67 @@ void __exit ksu_sucompat_exit()
 {
 	ksu_unregister_feature_handler(KSU_FEATURE_SU_COMPAT);
 }
+
+/*
+ * Legacy ABI compatibility wrappers for 4.14 syscall table hook path.
+ * On kernels < 4.19, syscall_table_hook_arm64.c passes individual
+ * arguments (not pt_regs) and calls sys_execve/faccessat/newfstatat
+ * directly after our hook returns. We only need to detect /system/bin/su
+ * and redirect *filename_user to ksud or sh.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
+
+static __always_inline int sucompat_redirect_filename(
+	const char __user **filename_user, const char *tag, bool escalate)
+{
+	char path[sizeof(su_path) + 1];
+	long ret;
+
+	if (!ksu_is_allow_uid_for_current(current_uid().val))
+		return 0;
+
+	if (unlikely(!filename_user || !*filename_user))
+		return 0;
+
+	ret = strncpy_from_user(path, *filename_user, sizeof(path));
+	if (ret < 0)
+		return 0;
+
+	if (memcmp(path, su_path, sizeof(su_path)))
+		return 0;
+
+	ksu_compat_sulog(escalate ? 'x' : 'a');
+	pr_info("%s: su found\n", tag);
+
+	if (escalate && !escape_with_root_profile()) {
+		struct path kpath;
+		if (!kern_path(KSUD_PATH, 0, &kpath)) {
+			path_put(&kpath);
+			pr_info("%s: su->ksud!\n", tag);
+			*filename_user = ksud_user_path();
+			return 0;
+		}
+	}
+
+	pr_info("%s: su->sh!\n", tag);
+	*filename_user = userspace_stack_buffer("/system/bin/sh", 14);
+	return 0;
+}
+
+int ksu_handle_execve(const char __user **filename_user, void *argv, void *envp)
+{
+	return sucompat_redirect_filename(filename_user, "sys_execve", true);
+}
+
+int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
+			 int *mode, int *__unused_flags)
+{
+	return sucompat_redirect_filename(filename_user, "faccessat", false);
+}
+
+int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
+{
+	return sucompat_redirect_filename(filename_user, "newfstatat", false);
+}
+
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0) */

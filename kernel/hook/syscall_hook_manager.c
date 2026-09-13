@@ -1,17 +1,9 @@
 #include "linux/printk.h"
 #include <linux/spinlock.h>
-#include <linux/kprobes.h>
-#include <linux/tracepoint.h>
+#include <linux/version.h>
 #include <asm/syscall.h>
 #include <linux/ptrace.h>
 #include <linux/slab.h>
-#include <trace/events/syscalls.h>
-
-#include <linux/version.h>
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
-#include <linux/compat.h>
-#include <linux/sched/task_stack.h>
-#endif
 
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
@@ -21,6 +13,58 @@
 #include "hook/setuid_hook.h"
 #include "hook/syscall_hook.h"
 #include "hook/syscall_event_bridge.h"
+
+/*
+ * =========================================================================
+ * 4.14 LEGACY PATH: Direct syscall table patching (no tracepoint/dispatcher)
+ *
+ * On 4.14 ARM64, the __sys_trace assembly path passes individual syscall
+ * arguments in registers, NOT a pt_regs pointer. The tracepoint-based
+ * dispatcher expects pt_regs* as its first argument — ABI mismatch → panic.
+ *
+ * Instead, we use the proven direct syscall table patching from
+ * syscall_table_hook_arm64.c (KernelSU v1.3.1 approach).
+ * =========================================================================
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
+
+extern void __init ksu_legacy_syscall_table_hook_init(void);
+extern void __exit ksu_legacy_syscall_table_hook_exit(void);
+
+void __init ksu_syscall_hook_manager_init(void)
+{
+    pr_info("hook_manager: 4.14 legacy mode — direct syscall table patching\n");
+
+    /* Direct-patch the syscall table (replaces tracepoint dispatcher) */
+    ksu_legacy_syscall_table_hook_init();
+
+    /* Initialize subsystems that don't depend on the dispatcher */
+    ksu_setuid_hook_init();
+    ksu_sucompat_init();
+    ksu_avc_spoof_init();
+}
+
+void __exit ksu_syscall_hook_manager_exit(void)
+{
+    pr_info("hook_manager: 4.14 legacy mode — restoring syscall table\n");
+
+    ksu_legacy_syscall_table_hook_exit();
+
+    ksu_sucompat_exit();
+    ksu_setuid_hook_exit();
+    ksu_avc_spoof_exit();
+}
+
+#else /* >= 5.0 — tracepoint dispatcher path */
+
+#include <linux/kprobes.h>
+#include <linux/tracepoint.h>
+#include <trace/events/syscalls.h>
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
+#include <linux/compat.h>
+#include <linux/sched/task_stack.h>
+#endif
 
 #ifdef CONFIG_KRETPROBES
 
@@ -181,3 +225,5 @@ void __exit ksu_syscall_hook_manager_exit(void)
     ksu_setuid_hook_exit();
     ksu_avc_spoof_exit();
 }
+
+#endif /* >= 5.0 */

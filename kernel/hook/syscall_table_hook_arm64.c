@@ -2,6 +2,19 @@
 #error "only meant for ARM64"
 #endif
 
+#include <linux/version.h>
+#include <linux/kthread.h>
+#include <linux/delay.h>
+#include <linux/sched.h>
+#include <linux/mutex.h>
+#include <linux/uaccess.h>
+#include <linux/slab.h>
+#include <asm/cacheflush.h>
+#include "../syscall_hook.h"
+#include "../feature/sucompat.h"
+#include "../runtime/ksud.h"
+#include "klog.h" // IWYU pragma: keep
+
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/include/uapi/asm-generic/unistd.h
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/arch/arm64/include/asm/unistd32.h
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/arch/arm64/include/asm/unistd.h
@@ -484,9 +497,39 @@ static __init int ksu_syscall_table_hook_init()
 	read_and_replace_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)compat_sys_call_table);
 #endif // COMPAT
 
-	// start unreg kthread
-	kthread_run(ksu_syscall_table_restore, NULL, "unhook");
 	return 0;
+}
+
+/*
+ * Legacy API for syscall_hook_manager.c (4.14 path)
+ * These replace the dispatcher-based hooks with direct syscall table patching.
+ */
+void __init ksu_legacy_syscall_table_hook_init(void)
+{
+	ksu_syscall_table_hook_init();
+}
+
+void __exit ksu_legacy_syscall_table_hook_exit(void)
+{
+	/* start unreg kthread — restores all hooked syscalls */
+	kthread_run(ksu_syscall_table_restore, NULL, "ksu_unhook");
+}
+
+/*
+ * Provide ksu_syscall_table + ksu_syscall_hook_init/exit for 4.14.
+ * On 4.19+ these live in arm64/syscall_hook.c, but on 4.14 that file
+ * is not compiled (we use syscall_table_hook_arm64.c instead).
+ */
+void __init ksu_syscall_hook_init(void)
+{
+	ksu_syscall_table = (syscall_fn_t *)sys_call_table;
+	pr_info("ksu: sys_call_table=0x%lx (4.14 legacy direct-patch)\n",
+		(unsigned long)ksu_syscall_table);
+}
+
+void __exit ksu_syscall_hook_exit(void)
+{
+	/* stub — unhook is handled by ksu_legacy_syscall_table_hook_exit */
 }
 
 // EOF

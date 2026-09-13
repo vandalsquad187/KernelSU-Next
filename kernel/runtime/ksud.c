@@ -26,8 +26,8 @@ static void stop_input_hook();
 
 static bool ksu_module_mounted __read_mostly = false;
 static bool ksu_boot_completed __read_mostly = false;
-static bool ksu_vfs_read_hook __read_mostly = true;
-static bool ksu_input_hook __read_mostly = true;
+bool ksu_vfs_read_hook __read_mostly = true;
+bool ksu_input_hook __read_mostly = true;
 
 #ifdef KSU_CAN_USE_JUMP_LABEL
 DEFINE_STATIC_KEY_TRUE(ksud_vfs_read_key);
@@ -425,7 +425,7 @@ static noinline void ksu_install_rc_hook(struct file *file)
 }
 
 // for sys_read kp / syscall table
-static noinline void ksu_handle_sys_read_fd(unsigned int fd)
+noinline void ksu_handle_sys_read_fd(unsigned int fd)
 {
 	if (likely(!ksu_vfs_read_hook))
 		return;

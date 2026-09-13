@@ -13,8 +13,15 @@ kernelsu-objs += hook/syscall_event_bridge.o
 kernelsu-objs += hook/syscall_hook_manager.o
 kernelsu-objs += hook/tp_marker.o
 ifeq ($(CONFIG_ARM64),y)
+# 4.14: tracepoint dispatcher ABI incompatible (entry.S passes individual args,
+# not pt_regs*). Use proven direct syscall table patching instead.
+ifeq ($(shell [ "$(VERSION)" -eq 4 -a "$(PATCHLEVEL)" -le 19 ] 2>/dev/null && echo y),y)
+kernelsu-objs += hook/syscall_table_hook_arm64.o
+$(info -- KSU: 4.14 legacy direct-patch mode for ARM64)
+else
 kernelsu-objs += hook/arm64/patch_memory.o
 kernelsu-objs += hook/arm64/syscall_hook.o
+endif
 else ifeq ($(CONFIG_X86_64),y)
 kernelsu-objs += hook/x86_64/patch_memory.o
 kernelsu-objs += hook/x86_64/syscall_hook.o

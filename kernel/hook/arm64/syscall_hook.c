@@ -2,6 +2,7 @@
 
 #include "../syscall_hook.h"
 
+#include <linux/version.h>
 #include <linux/kallsyms.h>
 #include <linux/mutex.h>
 #include <linux/syscalls.h>
@@ -20,6 +21,62 @@
 
 syscall_fn_t *ksu_syscall_table = NULL;
 int ksu_dispatcher_nr = -1;
+
+/*
+ * =========================================================================
+ * 4.14 LEGACY PATH: Direct syscall table patching (no dispatcher)
+ *
+ * On 4.14, the kernel's __sys_trace assembly path passes individual
+ * syscall arguments in registers (NOT a pt_regs pointer), so the
+ * tracepoint-based dispatcher ABI is incompatible.
+ * Instead, we patch the syscall table directly for each hooked syscall,
+ * matching the proven approach from KernelSU v1.3.1.
+ * =========================================================================
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
+
+/* stubs — dispatcher not used on 4.14, hooks done by syscall_table_hook_arm64.c */
+int ksu_register_syscall_hook(int nr, ksu_syscall_hook_fn fn) { return -ENOSYS; }
+void ksu_unregister_syscall_hook(int nr) { }
+bool ksu_has_syscall_hook(int nr) { return false; }
+
+void __init ksu_syscall_hook_init(void)
+{
+    ksu_syscall_table = (syscall_fn_t *)ksu_resolve_symbol_for_functable_hook("sys_call_table");
+#ifndef MODULE
+    if (!ksu_syscall_table) {
+        extern const void *sys_call_table[];
+        ksu_syscall_table = (syscall_fn_t *)sys_call_table;
+    }
+#endif
+    pr_info("ksu: sys_call_table=0x%lx (legacy direct-patch mode)\n",
+            (unsigned long)ksu_syscall_table);
+
+    if (!ksu_syscall_table)
+        return;
+
+#ifndef MODULE
+    {
+        unsigned long read_entry = 0;
+        if (probe_kernel_read(&read_entry, (void *)&ksu_syscall_table[__NR_read],
+                              sizeof(read_entry)) ||
+            read_entry != (unsigned long)&sys_read) {
+            pr_err("ksu: sys_call_table check failed: [%d]=0x%lx, sys_read=0x%lx, aborting\n",
+                   __NR_read, read_entry, (unsigned long)&sys_read);
+            ksu_syscall_table = NULL;
+            return;
+        }
+        pr_info("ksu: sys_call_table check ok: read=%pS\n", (void *)read_entry);
+    }
+#endif
+}
+
+void __exit ksu_syscall_hook_exit(void)
+{
+    /* cleanup handled by syscall_table_hook_arm64.c */
+}
+
+#else /* >= 5.0 */
 
 // Hook registration table — read with READ_ONCE from tracepoint/dispatcher
 // context, written with WRITE_ONCE from init/exit context.
@@ -303,5 +360,7 @@ clear_state:
 
     pr_info("all syscall hooks restored\n");
 }
+
+#endif /* >= 5.0 */
 
 #endif /* __aarch64__ */
