@@ -10,9 +10,9 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <asm/cacheflush.h>
-#include "../syscall_hook.h"
-#include "../feature/sucompat.h"
-#include "../runtime/ksud.h"
+#include "hook/syscall_hook.h"
+#include "feature/sucompat.h"
+#include "runtime/ksud.h"
 #include "klog.h" // IWYU pragma: keep
 
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/include/uapi/asm-generic/unistd.h
