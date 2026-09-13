@@ -22,6 +22,9 @@ int ksu_install_fd(void);
 void ksu_supercalls_init(void);
 void ksu_supercalls_exit(void);
 
+// sys_reboot hook handler (used by syscall_table_hook_arm64.c)
+int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
+
 // extensions (restored from k6a-sweet for 4.14)
 #define CHANGE_MANAGER_UID 10006
 #define KSU_UMOUNT_GETSIZE 107   // get list size
