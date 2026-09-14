@@ -683,3 +683,103 @@ void __exit ksu_ksud_exit()
         free_module_rc();
     }
 }
+
+/*
+ * Symbols needed by syscall_table_hook_arm64.c (4.14 split build).
+ * Originally in runtime/ksud.c which was a unity-build fragment and
+ * cannot be compiled standalone.
+ */
+bool ksu_vfs_read_hook = true;
+
+void ksu_handle_sys_read_fd(unsigned int fd)
+{
+    if (likely(!ksu_vfs_read_hook))
+        return;
+
+    if (!is_init(current_cred()))
+        return;
+
+    struct file *file = fget(fd);
+    if (!file)
+        return;
+
+    ksu_install_rc_hook(file);
+    fput(file);
+}
+
+static void ksu_common_newfstat_ret(unsigned int fd_int, void **statbuf_ptr,
+                                     const char *syscall_name)
+{
+    if (!is_init(current_cred()))
+        return;
+
+    struct file *file = fget(fd_int);
+    if (!file)
+        return;
+
+    if (!is_init_rc(file)) {
+        fput(file);
+        return;
+    }
+    fput(file);
+
+    pr_info("%s: stat init.rc\n", syscall_name);
+
+    uintptr_t statbuf_ptr_local = (uintptr_t)*(void **)statbuf_ptr;
+    void __user *statbuf = (void __user *)statbuf_ptr_local;
+    if (!statbuf)
+        return;
+
+    void __user *st_size_ptr;
+    long size, new_size;
+    size_t len;
+
+    st_size_ptr = statbuf + offsetof(struct stat, st_size);
+    len = sizeof(long);
+
+#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
+    if (strcmp(syscall_name, "sys_fstat64") == 0) {
+        st_size_ptr = statbuf + offsetof(struct stat64, st_size);
+        len = sizeof(long long);
+    }
+#endif
+
+    bool got_flipped = false;
+    if (!preemptible()) {
+        preempt_enable();
+        got_flipped = true;
+    }
+
+    if (ksu_copy_from_user_retry(&size, st_size_ptr, len)) {
+        pr_info("%s: read statbuf 0x%lx failed\n", syscall_name,
+                (unsigned long)st_size_ptr);
+        goto out;
+    }
+
+    new_size = size + ksu_rc_len + module_rc_len;
+    pr_info("%s: adding ksu_rc_len: %ld -> %ld\n", syscall_name, size,
+            new_size);
+
+    if (!copy_to_user(st_size_ptr, &new_size, len))
+        pr_info("%s: added ksu_rc_len\n", syscall_name);
+    else
+        pr_info("%s: add ksu_rc_len failed\n", syscall_name);
+
+out:
+    if (got_flipped)
+        preempt_disable();
+}
+
+void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr)
+{
+    if (unlikely(ksu_vfs_read_hook))
+        ksu_common_newfstat_ret(*fd, (void **)statbuf_ptr, "sys_newfstat");
+}
+
+#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
+void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_ptr)
+{
+    if (unlikely(ksu_vfs_read_hook))
+        ksu_common_newfstat_ret(*(unsigned int *)fd, (void **)statbuf_ptr, "sys_fstat64");
+}
+#endif
