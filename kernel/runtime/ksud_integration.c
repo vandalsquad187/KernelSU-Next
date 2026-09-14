@@ -531,7 +531,7 @@ bool ksu_is_safe_mode()
     return false;
 }
 
-static void ksu_execve_hook_ksud_common(const char __user *filename_user, const char __user *const __user *argv_user)
+void ksu_execve_hook_ksud_common(const char __user *filename_user, const char __user *const __user *argv_user)
 {
     struct user_arg_ptr argv = { .ptr.native = argv_user };
     char path[32];

@@ -190,6 +190,7 @@ static noinline long hook_aarch64_execve(const char __user * filename,
 				const char __user *const __user * envp)
 {
 	ksu_handle_execve(&filename, (void ***)&argv, (void ***)&envp);
+	ksu_execve_hook_ksud_common(filename, argv);
 	return sys_execve(filename, argv, envp);
 }
 
@@ -239,6 +240,7 @@ static noinline long hook_armeabi_execve(const char __user * filename,
 				const compat_uptr_t __user * envp)
 {
 	ksu_handle_execve(&filename, (void ***)&argv, (void ***)&envp);
+	ksu_execve_hook_ksud_common(filename, (const char __user *const __user *)argv);
 	return compat_sys_execve(filename, argv, envp);
 }
 
