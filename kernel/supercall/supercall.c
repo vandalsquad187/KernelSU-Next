@@ -20,6 +20,7 @@
 #include "util.h"
 #include "klog.h" // IWYU pragma: keep
 #include "manager/manager_identity.h"
+#include "manager/throne_tracker.h"
 
 #include "sulog/event.h"
 
@@ -251,6 +252,16 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
 
 	// Check if this is a request to install KSU fd
 	if (magic2 == KSU_INSTALL_MAGIC2) {
+		// Trigger throne_tracker on first FD request (after /data is mounted)
+		if (!ksu_is_manager_appid_valid()) {
+			pr_info("sys_reboot: manager not yet detected, running track_throne_now\n");
+			track_throne_now(false);
+			if (ksu_is_manager_appid_valid())
+				pr_info("sys_reboot: manager detected! appid=%d\n",
+					ksu_get_manager_appid());
+			else
+				pr_info("sys_reboot: manager still not detected\n");
+		}
 		return ksu_handle_fd_request(arg4);
 	}
 

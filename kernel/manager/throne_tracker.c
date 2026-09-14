@@ -432,6 +432,13 @@ void track_throne(bool prune_only)
 	kthread_run(throne_tracker_thread, (void *)prune_only, "ksu_throne");
 }
 
+void track_throne_now(bool prune_only)
+{
+	mutex_lock(&throne_tracker_mutex);
+	throne_tracker_fn(prune_only);
+	mutex_unlock(&throne_tracker_mutex);
+}
+
 void ksu_throne_tracker_init()
 {
 	// nothing to do
