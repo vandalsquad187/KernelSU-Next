@@ -27,7 +27,9 @@ static void stop_input_hook();
 static bool ksu_module_mounted __read_mostly = false;
 static bool ksu_boot_completed __read_mostly = false;
 bool ksu_vfs_read_hook __read_mostly = true;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 bool ksu_input_hook __read_mostly = true;
+#endif
 
 #ifdef KSU_CAN_USE_JUMP_LABEL
 DEFINE_STATIC_KEY_TRUE(ksud_vfs_read_key);
@@ -544,6 +546,7 @@ void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_pt
 static bool safe_mode_flag = false;
 #define VOLUME_PRESS_THRESHOLD_COUNT 3
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 bool ksu_is_safe_mode()
 {
 	// don't need to check again, userspace may call multiple times
@@ -728,6 +731,7 @@ static void stop_input_hook()
 	
 	vol_detector_exit();
 }
+#endif /* >= 5.0 */
 
 void __init ksu_ksud_init()
 {

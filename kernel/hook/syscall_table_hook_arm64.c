@@ -523,6 +523,8 @@ void __exit ksu_legacy_syscall_table_hook_exit(void)
  * On 4.19+ these live in arm64/syscall_hook.c, but on 4.14 that file
  * is not compiled (we use syscall_table_hook_arm64.c instead).
  */
+syscall_fn_t *ksu_syscall_table = NULL;
+
 void __init ksu_syscall_hook_init(void)
 {
 	ksu_syscall_table = (syscall_fn_t *)sys_call_table;
@@ -534,5 +536,111 @@ void __exit ksu_syscall_hook_exit(void)
 {
 	/* stub — unhook is handled by ksu_legacy_syscall_table_hook_exit */
 }
+
+/*
+ * ksu_syscall_table_hook / ksu_syscall_table_unhook for 4.14.
+ * Used by ksud_integration.c to hook __NR_read / __NR_fstat for
+ * init.rc injection. Uses the same vmap trick as read_and_replace_syscall.
+ */
+static DEFINE_MUTEX(hooked_entries_lock_414);
+
+struct hooked_entry_414 {
+	int nr;
+	syscall_fn_t orig;
+	struct list_head list;
+};
+static LIST_HEAD(hooked_entries_414);
+
+void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
+{
+	if (!ksu_syscall_table)
+		return;
+	if (nr < 0 || nr >= __NR_syscalls)
+		return;
+
+	mutex_lock(&hooked_entries_lock_414);
+
+	syscall_fn_t orig = READ_ONCE(ksu_syscall_table[nr]);
+	if (old)
+		*old = orig;
+
+	/* record for later restoration */
+	struct hooked_entry_414 *entry;
+	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+	if (entry) {
+		entry->nr = nr;
+		entry->orig = orig;
+		list_add(&entry->list, &hooked_entries_414);
+	}
+
+	/* vmap-write the new handler */
+	unsigned long addr = (unsigned long)&ksu_syscall_table[nr];
+	unsigned long base = addr & PAGE_MASK;
+	unsigned long offset = addr & ~PAGE_MASK;
+	struct page *page = phys_to_page(__pa(base));
+	if (!page) {
+		mutex_unlock(&hooked_entries_lock_414);
+		return;
+	}
+	void *writable = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
+	if (!writable) {
+		mutex_unlock(&hooked_entries_lock_414);
+		return;
+	}
+	syscall_fn_t *slot = (syscall_fn_t *)((unsigned long)writable + offset);
+
+	preempt_disable();
+	local_irq_disable();
+	WRITE_ONCE(*slot, fn);
+	local_irq_enable();
+	preempt_enable();
+	vunmap(writable);
+
+	pr_info("ksu: hooked syscall #%d -> %ps\n", nr, fn);
+	mutex_unlock(&hooked_entries_lock_414);
+}
+
+void ksu_syscall_table_unhook(int nr)
+{
+	if (!ksu_syscall_table)
+		return;
+
+	mutex_lock(&hooked_entries_lock_414);
+
+	struct hooked_entry_414 *entry, *tmp;
+	list_for_each_entry_safe(entry, tmp, &hooked_entries_414, list) {
+		if (entry->nr == nr) {
+			/* restore original */
+			unsigned long addr = (unsigned long)&ksu_syscall_table[nr];
+			unsigned long base = addr & PAGE_MASK;
+			unsigned long offset = addr & ~PAGE_MASK;
+			struct page *page = phys_to_page(__pa(base));
+			if (page) {
+				void *writable = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
+				if (writable) {
+					syscall_fn_t *slot = (syscall_fn_t *)((unsigned long)writable + offset);
+					preempt_disable();
+					local_irq_disable();
+					WRITE_ONCE(*slot, entry->orig);
+					local_irq_enable();
+					preempt_enable();
+					vunmap(writable);
+				}
+			}
+			list_del(&entry->list);
+			kfree(entry);
+			pr_info("ksu: unhooked syscall #%d\n", nr);
+			break;
+		}
+	}
+
+	mutex_unlock(&hooked_entries_lock_414);
+}
+
+/* Provide stubs for unused APIs */
+int ksu_register_syscall_hook(int nr, ksu_syscall_hook_fn fn) { return -ENOSYS; }
+void ksu_unregister_syscall_hook(int nr) { }
+bool ksu_has_syscall_hook(int nr) { return false; }
+int ksu_dispatcher_nr = -1;
 
 // EOF
