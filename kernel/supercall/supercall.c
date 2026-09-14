@@ -40,6 +40,50 @@
 #define TWA_RESUME true
 #endif
 #endif
+/*
+ * 4.14 LEGACY: sys_prctl handler for Manager version detection.
+ *
+ * Upstream KSU-Next hooks prctl via kprobes to handle this, but on 4.14
+ * we use direct syscall table patching. The Manager JNI calls:
+ *   prctl(0xDEADBEEF, 2, &version, &flags, &result)
+ * as a fallback when it has no [ksu_driver] fd.
+ */
+long ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
+		      unsigned long arg4, unsigned long arg5)
+{
+	if (option != 0xDEADBEEF)
+		return -ENOSYS;
+
+	/* arg2 == 2: get_info_legacy path (version + flags) */
+	if (arg2 == 2) {
+		u32 version = KERNEL_SU_VERSION;
+		u32 flags = 0;
+		int __user *u_version = (int __user *)arg3;
+		int __user *u_flags = (int __user *)arg4;
+
+		if (ksuver_override)
+			version = ksuver_override;
+
+		if (is_manager())
+			flags |= KSU_GET_INFO_FLAG_MANAGER;
+		if (ksu_late_loaded)
+			flags |= KSU_GET_INFO_FLAG_LATE_LOAD;
+#ifdef EXPECTED_SIZE2
+		flags |= KSU_GET_INFO_FLAG_PR_BUILD;
+#endif
+		if (u_version && copy_to_user(u_version, &version, sizeof(version)))
+			return -EFAULT;
+		if (u_flags && copy_to_user(u_flags, &flags, sizeof(flags)))
+			return -EFAULT;
+
+		pr_info("prctl: legacy get_info version=%u flags=0x%x for pid %d\n",
+			version, flags, current->pid);
+		return 0;
+	}
+
+	return -ENOSYS;
+}
+
 uint32_t ksuver_override = 0;
 static uint32_t ksuflags_override = 0;
 // tiny_sulog.o not in split Kbuild (legacy dump superseded by sulog/event+fd)
@@ -118,9 +162,37 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
 	kfree(tw);
 }
 
+static void ksu_install_fd_in_parent(struct callback_head *cb)
+{
+	struct ksu_install_fd_tw *tw = container_of(cb, struct ksu_install_fd_tw, cb);
+	struct task_struct *parent = current->real_parent;
+	int fd;
+
+	if (!parent || !parent->files) {
+		pr_warn("install fd: parent not available\n");
+		goto out;
+	}
+
+	/*
+	 * task_work callback runs in parent's context (TWA_RESUME),
+	 * so ksu_install_fd() installs in parent's fd table directly.
+	 */
+	fd = ksu_install_fd();
+	if (fd < 0) {
+		pr_warn("install fd: failed in parent pid %d\n", parent->pid);
+		goto out;
+	}
+
+	pr_info("install fd: fd=%d installed in parent pid %d (child pid %d)\n",
+		fd, parent->pid, current->pid);
+
+out:
+	kfree(tw);
+}
+
 static int ksu_handle_fd_request(void __user *arg4)
 {
-	struct ksu_install_fd_tw *tw;
+	struct ksu_install_fd_tw *tw, *parent_tw;
 
 	tw = kzalloc(sizeof(*tw), GFP_ATOMIC);
 	if (!tw)
@@ -132,6 +204,36 @@ static int ksu_handle_fd_request(void __user *arg4)
 	if (task_work_add(current, &tw->cb, TWA_RESUME)) {
 		kfree(tw);
 		pr_warn("install fd add task_work failed\n");
+	}
+
+	/*
+	 * FD propagation: if this is a child ksud process (not the Manager
+	 * main process), also install the fd in the Manager parent so that
+	 * the Manager JNI can use it for setAppProfile() and other ioctls.
+	 *
+	 * Upstream handles this via kprobes on sys_reboot — the fd is
+	 * installed in the calling process via task_work_add, which runs
+	 * in the Manager's context. On 4.14, ksud (child) calls sys_reboot,
+	 * so the fd only ends up in ksud. We propagate it to the parent.
+	 */
+	if (ksu_is_manager_appid_valid() &&
+	    !is_manager() &&
+	    current->real_parent &&
+	    current->real_parent->files &&
+	    is_uid_manager(current_uid().val % KSU_PER_USER_RANGE)) {
+
+		parent_tw = kzalloc(sizeof(*parent_tw), GFP_ATOMIC);
+		if (parent_tw) {
+			parent_tw->cb.func = ksu_install_fd_in_parent;
+			if (task_work_add(current->real_parent,
+					  &parent_tw->cb, TWA_RESUME)) {
+				kfree(parent_tw);
+				pr_warn("install fd: propagate to parent failed\n");
+			} else {
+				pr_info("install fd: propagating to parent pid %d\n",
+					current->real_parent->pid);
+			}
+		}
 	}
 
 	return 0;

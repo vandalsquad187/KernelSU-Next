@@ -28,6 +28,7 @@
 #define __AARCH64_newfstatat	79
 #define __AARCH64_newfstat	80
 #define __AARCH64_read		63
+#define __AARCH64_prctl		167
 
 // NOTE: CONFIG_COMPAT implies __ARCH_WANT_COMPAT_STAT64 (fstatat64, fstat64)
 #define __ARMEABI_reboot	88
@@ -36,6 +37,7 @@
 #define __ARMEABI_fstatat64	327
 #define __ARMEABI_fstat64	197
 #define __ARMEABI_read		3
+#define __ARMEABI_prctl		172
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
 
@@ -102,6 +104,21 @@ static noinline long hook_aarch64_read(const struct pt_regs *regs)
 
 	ksu_handle_sys_read_fd(fd);
 	return aarch64_read(regs);
+}
+
+static syscall_fn_t aarch64_prctl __read_mostly = NULL;
+static noinline long hook_aarch64_prctl(const struct pt_regs *regs)
+{
+	int option = (int)regs->regs[0];
+	unsigned long arg2 = regs->regs[1];
+	unsigned long arg3 = regs->regs[2];
+	unsigned long arg4 = regs->regs[3];
+	unsigned long arg5 = regs->regs[4];
+
+	long ret = ksu_handle_prctl(option, arg2, arg3, arg4, arg5);
+	if (ret != -ENOSYS)
+		return ret;
+	return aarch64_prctl(regs);
 }
 
 #ifdef CONFIG_COMPAT
@@ -224,6 +241,17 @@ static noinline long hook_aarch64_read(unsigned int fd, char __user *buf, size_t
 	return sys_read(fd, buf, count);
 }
 
+static uintptr_t aarch64_prctl __read_mostly = NULL;
+static noinline long hook_aarch64_prctl(int option, unsigned long arg2,
+					unsigned long arg3, unsigned long arg4,
+					unsigned long arg5)
+{
+	long ret = ksu_handle_prctl(option, arg2, arg3, arg4, arg5);
+	if (ret != -ENOSYS)
+		return ret;
+	return sys_prctl(option, arg2, arg3, arg4, arg5);
+}
+
 #ifdef CONFIG_COMPAT
 extern const void *compat_sys_call_table[];
 
@@ -272,6 +300,17 @@ static noinline long hook_armeabi_read(unsigned int fd, char __user *buf, size_t
 {
 	ksu_handle_sys_read_fd(fd);
 	return sys_read(fd, buf, count);
+}
+
+static uintptr_t armeabi_prctl __read_mostly = NULL;
+static noinline long hook_armeabi_prctl(int option, unsigned long arg2,
+					unsigned long arg3, unsigned long arg4,
+					unsigned long arg5)
+{
+	long ret = ksu_handle_prctl(option, arg2, arg3, arg4, arg5);
+	if (ret != -ENOSYS)
+		return ret;
+	return sys_prctl(option, arg2, arg3, arg4, arg5);
 }
 
 #endif // CONFIG_COMPAT
@@ -438,10 +477,12 @@ loop_start:
 
 	restore_syscall((void *)&aarch64_newfstat, __AARCH64_newfstat, (void *)hook_aarch64_newfstat_ret, (void *)sys_call_table);
 	restore_syscall((void *)&aarch64_read, __AARCH64_read, (void *)hook_aarch64_read, (void *)sys_call_table);
+	restore_syscall((void *)&aarch64_prctl, __AARCH64_prctl, (void *)hook_aarch64_prctl, (void *)sys_call_table);
 
 #if defined(CONFIG_COMPAT)
 	restore_syscall((void *)&armeabi_fstat64, __ARMEABI_fstat64, (void *)hook_armeabi_fstat64_ret, (void *)compat_sys_call_table);
 	restore_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)compat_sys_call_table);
+	restore_syscall((void *)&armeabi_prctl, __ARMEABI_prctl, (void *)hook_armeabi_prctl, (void *)compat_sys_call_table);
 #endif
 	
 	return 0;
@@ -490,12 +531,18 @@ static __init int ksu_syscall_table_hook_init()
 
 	read_and_replace_syscall((void *)&aarch64_reboot, __AARCH64_reboot, (void *)hook_aarch64_reboot, (void *)sys_call_table);
 
+	// 4.14 legacy: hook sys_prctl for Manager version detection
+	read_and_replace_syscall((void *)&aarch64_prctl, __AARCH64_prctl, (void *)hook_aarch64_prctl, (void *)sys_call_table);
+
 	// will be unregged
 	read_and_replace_syscall((void *)&aarch64_newfstat, __AARCH64_newfstat, (void *)hook_aarch64_newfstat_ret, (void *)sys_call_table);
 	read_and_replace_syscall((void *)&aarch64_read, __AARCH64_read, (void *)hook_aarch64_read, (void *)sys_call_table);
 
 #if defined(CONFIG_COMPAT)
 	read_and_replace_syscall((void *)&armeabi_reboot, __ARMEABI_reboot, (void *)hook_armeabi_reboot, (void *)compat_sys_call_table);
+
+	// 4.14 legacy: hook compat sys_prctl for Manager version detection
+	read_and_replace_syscall((void *)&armeabi_prctl, __ARMEABI_prctl, (void *)hook_armeabi_prctl, (void *)compat_sys_call_table);
 
 	// will be unregged
 	read_and_replace_syscall((void *)&armeabi_fstat64, __ARMEABI_fstat64, (void *)hook_armeabi_fstat64_ret, (void *)compat_sys_call_table);
