@@ -663,13 +663,23 @@ void __init ksu_ksud_init()
 {
     int ret;
 
-    ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
-    ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
+	/*
+	 * On 4.14, the legacy direct syscall table hooks (hook_aarch64_read,
+	 * hook_aarch64_newfstat_ret) already handle rc injection and stat
+	 * size patching. The ksud-level hooks (ksu_sys_read, ksu_sys_fstat)
+	 * use the pt_regs ABI which is only valid on 4.19+. Installing them
+	 * on 4.14 causes fd (a small int like 0,1,2) to be dereferenced as
+	 * a pt_regs pointer → NULL deref → kernel panic → boot loop.
+	 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+	ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
+	ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
+#endif
 
-    ret = register_kprobe(&input_event_kp);
-    pr_info("ksud: input_event_kp: %d\n", ret);
+	ret = register_kprobe(&input_event_kp);
+	pr_info("ksud: input_event_kp: %d\n", ret);
 
-    INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
+	INIT_WORK(&stop_input_hook_work, do_stop_input_hook);
 }
 
 void __exit ksu_ksud_exit()
