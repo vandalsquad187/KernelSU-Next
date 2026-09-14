@@ -216,12 +216,17 @@ static int ksu_handle_fd_request(void __user *arg4)
 	 * installed in the calling process via task_work_add, which runs
 	 * in the Manager's context. On 4.14, ksud (child) calls sys_reboot,
 	 * so the fd only ends up in ksud. We propagate it to the parent.
+	 *
+	 * Note: ksud child processes share the Manager's UID (spawned by
+	 * libsu Shell.cmd), so !is_manager() would always be false. Instead,
+	 * we check if the parent also has the Manager's UID — this means
+	 * the parent is a Manager process (not init/zygote), and the current
+	 * process is a child that should propagate the fd upward.
 	 */
 	if (ksu_is_manager_appid_valid() &&
-	    !is_manager() &&
 	    current->real_parent &&
 	    current->real_parent->files &&
-	    is_uid_manager(current_uid().val % KSU_PER_USER_RANGE)) {
+	    is_uid_manager(current->real_parent->uid % KSU_PER_USER_RANGE)) {
 
 		parent_tw = kzalloc(sizeof(*parent_tw), GFP_ATOMIC);
 		if (parent_tw) {
@@ -231,8 +236,9 @@ static int ksu_handle_fd_request(void __user *arg4)
 				kfree(parent_tw);
 				pr_warn("install fd: propagate to parent failed\n");
 			} else {
-				pr_info("install fd: propagating to parent pid %d\n",
-					current->real_parent->pid);
+				pr_info("install fd: propagating to parent pid %d uid %d\n",
+					current->real_parent->pid,
+					current->real_parent->uid);
 			}
 		}
 	}
