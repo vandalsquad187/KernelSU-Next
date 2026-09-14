@@ -14,6 +14,7 @@
 
 #include "uapi/app_profile.h"
 #include "uapi/supercall.h"
+#include "ksu.h"
 #include "supercall/internal.h"
 #include "supercall/supercall.h"
 #include "arch.h"
