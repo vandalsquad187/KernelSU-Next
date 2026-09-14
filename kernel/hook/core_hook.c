@@ -91,7 +91,7 @@ LSM_HANDLER_TYPE ksu_handle_rename(struct dentry *old_dentry, struct dentry *new
 		return 0;
 	}
 
-	if (!strstr(buf, "/system/packages.list")) {
+	if (!strstr(buf, "system/packages.list")) {
 		return 0;
 	}
 	pr_info("renameat: %s -> %s, new path: %s\n", old_dentry->d_iname,
