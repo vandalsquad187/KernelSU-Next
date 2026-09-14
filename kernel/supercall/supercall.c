@@ -226,7 +226,7 @@ static int ksu_handle_fd_request(void __user *arg4)
 	if (ksu_is_manager_appid_valid() &&
 	    current->real_parent &&
 	    current->real_parent->files &&
-	    is_uid_manager(current->real_parent->uid % KSU_PER_USER_RANGE)) {
+	    is_uid_manager(__kuid_val(task_uid(current->real_parent)) % KSU_PER_USER_RANGE)) {
 
 		parent_tw = kzalloc(sizeof(*parent_tw), GFP_ATOMIC);
 		if (parent_tw) {
@@ -238,7 +238,7 @@ static int ksu_handle_fd_request(void __user *arg4)
 			} else {
 				pr_info("install fd: propagating to parent pid %d uid %d\n",
 					current->real_parent->pid,
-					current->real_parent->uid);
+					__kuid_val(task_uid(current->real_parent)));
 			}
 		}
 	}
