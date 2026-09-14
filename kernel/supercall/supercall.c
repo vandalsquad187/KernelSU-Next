@@ -147,6 +147,7 @@ int ksu_install_fd(void)
 struct ksu_install_fd_tw {
 	struct callback_head cb;
 	int __user *outp;
+	struct task_struct *manager_task; /* for fd propagation to Manager ancestor */
 };
 
 static void ksu_install_fd_tw_func(struct callback_head *cb)
@@ -166,28 +167,25 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
 static void ksu_install_fd_in_parent(struct callback_head *cb)
 {
 	struct ksu_install_fd_tw *tw = container_of(cb, struct ksu_install_fd_tw, cb);
-	struct task_struct *parent = current->real_parent;
 	int fd;
 
-	if (!parent || !parent->files) {
-		pr_warn("install fd: parent not available\n");
-		goto out;
-	}
-
 	/*
-	 * task_work callback runs in parent's context (TWA_RESUME),
-	 * so ksu_install_fd() installs in parent's fd table directly.
+	 * task_work callback runs in the target process's context (TWA_RESUME).
+	 * When called via task_work_add(manager_task, ...), current IS the
+	 * Manager process, so ksu_install_fd() installs in its fd table.
 	 */
 	fd = ksu_install_fd();
 	if (fd < 0) {
-		pr_warn("install fd: failed in parent pid %d\n", parent->pid);
+		pr_warn("install fd: failed in manager pid %d\n", current->pid);
 		goto out;
 	}
 
-	pr_info("install fd: fd=%d installed in parent pid %d (child pid %d)\n",
-		fd, parent->pid, current->pid);
+	pr_info("install fd: fd=%d installed in manager pid %d (child pid %d)\n",
+		fd, current->pid, tw->manager_task ? tw->manager_task->pid : 0);
 
 out:
+	if (tw->manager_task)
+		put_task_struct(tw->manager_task);
 	kfree(tw);
 }
 
@@ -208,38 +206,61 @@ static int ksu_handle_fd_request(void __user *arg4)
 	}
 
 	/*
-	 * FD propagation: if this is a child ksud process (not the Manager
-	 * main process), also install the fd in the Manager parent so that
-	 * the Manager JNI can use it for setAppProfile() and other ioctls.
+	 * FD propagation: walk up the process tree to find the Manager
+	 * main app process and install the fd there.
 	 *
-	 * Upstream handles this via kprobes on sys_reboot — the fd is
-	 * installed in the calling process via task_work_add, which runs
-	 * in the Manager's context. On 4.14, ksud (child) calls sys_reboot,
-	 * so the fd only ends up in ksud. We propagate it to the parent.
-	 *
-	 * Note: ksud child processes share the Manager's UID (spawned by
-	 * libsu Shell.cmd), so !is_manager() would always be false. Instead,
-	 * we check if the parent also has the Manager's UID — this means
-	 * the parent is a Manager process (not init/zygote), and the current
-	 * process is a child that should propagate the fd upward.
+	 * On 4.14, ksud (child) calls sys_reboot. The Manager spawns ksud
+	 * via Shell.cmd(), so ksud's parent is typically a shell process,
+	 * not the Manager. Also, ALL processes in the Manager's UID subtree
+	 * (ksud, shell) share UID 10380. We must walk to the TOP of the
+	 * UID subtree — the Manager app is the root process whose parent
+	 * does NOT share the Manager UID.
 	 */
-	if (ksu_is_manager_appid_valid() &&
-	    current->real_parent &&
-	    current->real_parent->files &&
-	    is_uid_manager(__kuid_val(task_uid(current->real_parent)) % KSU_PER_USER_RANGE)) {
+	if (ksu_is_manager_appid_valid()) {
+		struct task_struct *ancestor;
+		struct task_struct *manager_task = NULL;
 
-		parent_tw = kzalloc(sizeof(*parent_tw), GFP_ATOMIC);
-		if (parent_tw) {
-			parent_tw->cb.func = ksu_install_fd_in_parent;
-			if (task_work_add(current->real_parent,
-					  &parent_tw->cb, TWA_RESUME)) {
-				kfree(parent_tw);
-				pr_warn("install fd: propagate to parent failed\n");
+		rcu_read_lock();
+		ancestor = current->real_parent;
+		while (ancestor && ancestor != &init_task) {
+			if (is_uid_manager(
+				__kuid_val(task_uid(ancestor)) % KSU_PER_USER_RANGE)) {
+				/* Remember this, but keep walking to the root */
+				manager_task = ancestor;
 			} else {
-				pr_info("install fd: propagating to parent pid %d uid %d\n",
-					current->real_parent->pid,
-					__kuid_val(task_uid(current->real_parent)));
+				/* Left the Manager UID subtree */
+				break;
 			}
+			ancestor = ancestor->real_parent;
+		}
+		/* Take a reference on the final result */
+		if (manager_task)
+			get_task_struct(manager_task);
+		rcu_read_unlock();
+
+		if (manager_task) {
+			parent_tw = kzalloc(sizeof(*parent_tw), GFP_ATOMIC);
+			if (parent_tw) {
+				parent_tw->cb.func = ksu_install_fd_in_parent;
+				parent_tw->manager_task = manager_task;
+				/* Note: put_task_struct is done in the callback */
+				if (task_work_add(manager_task,
+						  &parent_tw->cb, TWA_RESUME)) {
+					kfree(parent_tw);
+					put_task_struct(manager_task);
+					pr_warn("install fd: propagate to manager failed\n");
+				} else {
+					pr_info("install fd: propagating to manager pid %d uid %d\n",
+						manager_task->pid,
+						__kuid_val(task_uid(manager_task)));
+					/* manager_task reference released by callback */
+				}
+			} else {
+				put_task_struct(manager_task);
+			}
+		} else {
+			pr_warn("install fd: no manager ancestor found for pid %d\n",
+				current->pid);
 		}
 	}
 
