@@ -10,6 +10,7 @@
 #include "runtime/ksud.h"
 #include "manager/manager_observer.h"
 #include "manager/throne_tracker.h"
+#include "supercall/supercall.h"
 
 bool ksu_module_mounted __read_mostly = false;
 bool ksu_boot_completed __read_mostly = false;
@@ -33,6 +34,20 @@ void on_post_fs_data(void)
     // Sanity check for safe mode only needs early-boot input samples.
     ksu_stop_input_hook_runtime();
     ksu_selinux_hide_handle_post_fs_data();
+
+    /* Early Manager UID detection + FD propagation.
+     * At post-fs-data, /data is mounted and packages.list is available.
+     * By calling track_throne_now() here, we identify the Manager UID
+     * before the Manager app starts (zygote hasn't forked it yet).
+     * Then the propagator thread polls for Manager processes and installs
+     * the [ksu_driver] fd via task_work(TWA_RESUME), which executes on
+     * the Manager's first return to userspace — before any Java code runs.
+     * This ensures the fd is available when Compose init calls getVersion(). */
+    track_throne_now(false);
+    if (ksu_is_manager_appid_valid())
+        pr_info("on_post_fs_data: manager detected early, appid=%d\n",
+                ksu_get_manager_appid());
+    ksu_start_fd_propagator();
 }
 
 extern void ext4_unregister_sysfs(struct super_block *sb);
@@ -66,10 +81,16 @@ void on_module_mounted(void)
 
 void on_boot_completed(void)
 {
-    ksu_boot_completed = true;
-    pr_info("on_boot_completed!\n");
-    track_throne_now(false);
-    track_throne(true);
-    ksu_selinux_hide_drop_backup_if_unused();
-    ksu_avc_spoof_late_init();
+	ksu_boot_completed = true;
+	pr_info("on_boot_completed!\n");
+	track_throne_now(false);
+	track_throne(true);
+	ksu_selinux_hide_drop_backup_if_unused();
+	ksu_avc_spoof_late_init();
+
+	/* Start FD propagator: install [ksu_driver] fd in Manager proactively.
+	 * On 4.14, the fd normally comes from ksud sys_reboot which runs AFTER
+	 * the Manager starts and evaluates requireNewKernel(). This thread
+	 * races Compose init to install the fd before the first evaluation. */
+	ksu_start_fd_propagator();
 }

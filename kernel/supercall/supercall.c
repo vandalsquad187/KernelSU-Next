@@ -41,6 +41,130 @@
 #define TWA_RESUME true
 #endif
 #endif
+/* ---- FD Propagator Thread ----
+ *
+ * On 4.14, the [ksu_driver] fd is normally installed via sys_reboot from ksud,
+ * which runs AFTER the Manager app starts. The Manager's Compose init evaluates
+ * requireNewKernel() once via remember{} and caches the result — if the fd
+ * isn't available yet, "kernel update required" persists for the session.
+ *
+ * This kernel thread proactively installs the fd in every Manager process
+ * as soon as the Manager UID is known, racing against Compose init.
+ */
+#define FD_PROPAGATOR_POLL_MS 2000
+#define FD_PROPAGATOR_MAX_MS  30000
+
+/* Lightweight callback for propagator — just installs fd in current process */
+static void ksu_fd_propagator_cb(struct callback_head *cb)
+{
+	int fd = ksu_install_fd();
+	if (fd >= 0)
+		pr_info("fd_propagator: fd=%d installed in pid %d (uid %d)\n",
+			fd, current->pid,
+			__kuid_val(task_uid(current)));
+	else
+		pr_warn("fd_propagator: install failed in pid %d\n",
+			current->pid);
+	kfree(cb);
+}
+
+static bool manager_has_fd(struct task_struct *task)
+{
+	struct file *f;
+	int fd_idx;
+	bool found = false;
+
+	rcu_read_lock();
+	if (!task->files)
+		goto out;
+	for (fd_idx = 0; fd_idx <= task->files->max_fds; fd_idx++) {
+		f = fcheck_files(task->files, fd_idx);
+		if (f && f->f_op && f->f_op == &anon_ksu_fops) {
+			found = true;
+			break;
+		}
+	}
+out:
+	rcu_read_unlock();
+	return found;
+}
+
+static int fd_propagator_thread(void *data)
+{
+	int elapsed = 0;
+	int installed = 0;
+	struct task_struct *p;
+
+	pr_info("fd_propagator: started (pid %d)\n", current->pid);
+
+	while (elapsed < FD_PROPAGATOR_MAX_MS) {
+		if (!ksu_is_manager_appid_valid()) {
+			pr_info("fd_propagator: manager appid not yet valid, waiting...\n");
+			msleep(FD_PROPAGATOR_POLL_MS);
+			elapsed += FD_PROPAGATOR_POLL_MS;
+			continue;
+		}
+
+		rcu_read_lock();
+		for_each_process(p) {
+			if (!is_uid_manager(
+				__kuid_val(task_uid(p)) % KSU_PER_USER_RANGE))
+				continue;
+			if (p->flags & PF_KTHREAD)
+				continue;
+			if (manager_has_fd(p))
+				continue;
+
+			/* Allocate a callback_head on the heap.
+			 * task_work_add(TWA_RESUME) holds a ref on the task.
+			 * The callback runs in the target's context and frees cb. */
+			{
+				struct callback_head *cb;
+				cb = kmalloc(sizeof(*cb), GFP_ATOMIC);
+				if (cb) {
+					cb->func = ksu_fd_propagator_cb;
+					if (task_work_add(p, cb,
+							  TWA_RESUME) == 0) {
+						pr_info("fd_propagator: fd install queued for pid %d (uid %d)\n",
+							p->pid,
+							__kuid_val(task_uid(p)));
+						installed++;
+					} else {
+						kfree(cb);
+					}
+				}
+			}
+		}
+		rcu_read_unlock();
+
+		if (installed > 0) {
+			/* Give task_work a chance to execute */
+			msleep(500);
+			pr_info("fd_propagator: done, installed fd in %d processes\n",
+				installed);
+			return 0;
+		}
+
+		msleep(FD_PROPAGATOR_POLL_MS);
+		elapsed += FD_PROPAGATOR_POLL_MS;
+	}
+
+	pr_info("fd_propagator: timeout after %dms, installed in %d processes\n",
+		elapsed, installed);
+	return 0;
+}
+
+void ksu_start_fd_propagator(void)
+{
+	static bool started = false;
+	if (started)
+		return;
+	started = true;
+	kthread_run(fd_propagator_thread, NULL, "ksu_fd_prop");
+}
+
+/* ---- End FD Propagator ---- */
+
 /*
  * 4.14 LEGACY: sys_prctl handler for Manager version detection.
  *
@@ -54,6 +178,50 @@ long ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 {
 	if (option != 0xDEADBEEF)
 		return -ENOSYS;
+
+	/*
+	 * Proactive FD installation: when ANY process with the Manager's
+	 * UID calls prctl with KSU magic, install the [ksu_driver] fd.
+	 * This ensures the Manager has the fd BEFORE its first
+	 * get_info() ioctl call (which happens during Compose init).
+	 *
+	 * On 4.14, the fd is normally installed via sys_reboot from ksud.
+	 * But ksud runs AFTER the Manager starts, so the Manager's first
+	 * ioctl fails (fd=-1), returning version=0, causing
+	 * requireNewKernel() to return true ("kernel update required").
+	 * Installing the fd during prctl fixes this race.
+	 */
+	if (is_manager()) {
+		/* Check if current process already has [ksu_driver] fd */
+		bool has_fd = false;
+		struct file *f;
+		int fd_idx;
+
+		rcu_read_lock();
+		for (fd_idx = 0; fd_idx <= current->files->max_fds; fd_idx++) {
+			f = fcheck_files(current->files, fd_idx);
+			if (f && f->f_op && f->f_op == &anon_ksu_fops) {
+				has_fd = true;
+				break;
+			}
+		}
+		rcu_read_unlock();
+
+		if (!has_fd) {
+			struct ksu_install_fd_tw *tw;
+			tw = kzalloc(sizeof(*tw), GFP_ATOMIC);
+			if (tw) {
+				tw->cb.func = ksu_install_fd_tw_func;
+				tw->outp = NULL; /* no userspace output needed */
+				if (task_work_add(current, &tw->cb, TWA_RESUME)) {
+					kfree(tw);
+				} else {
+					pr_info("prctl: proactive fd install queued for pid %d\n",
+						current->pid);
+				}
+			}
+		}
+	}
 
 	/* arg2 == 2: get_info_legacy path (version + flags) */
 	if (arg2 == 2) {
