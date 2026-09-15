@@ -43,9 +43,8 @@
 #endif
 
 /* Forward declarations for symbols used before definition */
-struct ksu_install_fd_tw;
-static void ksu_install_fd_tw_func(struct callback_head *cb);
 static const struct file_operations anon_ksu_fops;
+
 /* ---- FD Propagator Thread ----
  *
  * On 4.14, the [ksu_driver] fd is normally installed via sys_reboot from ksud,
@@ -173,6 +172,13 @@ void ksu_start_fd_propagator(void)
 }
 
 /* ---- End FD Propagator ---- */
+
+/* FD install task_work struct — must be defined before ksu_handle_prctl */
+struct ksu_install_fd_tw {
+	struct callback_head cb;
+	int __user *outp;
+	struct task_struct *manager_task; /* for fd propagation to Manager ancestor */
+};
 
 /*
  * 4.14 LEGACY: sys_prctl handler for Manager version detection.
@@ -324,12 +330,7 @@ int ksu_install_fd(void)
 	return fd;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
-struct ksu_install_fd_tw {
-	struct callback_head cb;
-	int __user *outp;
-	struct task_struct *manager_task; /* for fd propagation to Manager ancestor */
-};
+/* struct ksu_install_fd_tw defined earlier, before ksu_handle_prctl */
 
 static void ksu_install_fd_tw_func(struct callback_head *cb)
 {
@@ -460,7 +461,6 @@ static int ksu_handle_fd_request(void __user *arg4)
 
 	return 0;
 }
-#endif
 
 // downstream: make sure to pass arg as reference, this can allow us to extend things.
 int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
