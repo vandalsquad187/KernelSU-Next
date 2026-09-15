@@ -44,6 +44,7 @@
 
 /* Forward declarations for symbols used before definition */
 static const struct file_operations anon_ksu_fops;
+static void ksu_install_fd_tw_func(struct callback_head *cb);
 
 /* ---- FD Propagator Thread ----
  *
@@ -444,19 +445,6 @@ static int ksu_handle_fd_request(void __user *arg4)
 			pr_warn("install fd: no manager ancestor found for pid %d\n",
 				current->pid);
 		}
-	}
-
-	return 0;
-}
-#else
-static int ksu_handle_fd_request(void __user *arg4)
-{
-	int fd = ksu_install_fd();
-	pr_info("[%d] install ksu fd: %d\n", current->pid, fd);
-
-	if (copy_to_user(arg4, &fd, sizeof(fd))) {
-		pr_err("install ksu fd reply err\n");
-		close_fd(fd);
 	}
 
 	return 0;
