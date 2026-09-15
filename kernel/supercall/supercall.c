@@ -41,6 +41,11 @@
 #define TWA_RESUME true
 #endif
 #endif
+
+/* Forward declarations for symbols used before definition */
+struct ksu_install_fd_tw;
+static void ksu_install_fd_tw_func(struct callback_head *cb);
+static const struct file_operations anon_ksu_fops;
 /* ---- FD Propagator Thread ----
  *
  * On 4.14, the [ksu_driver] fd is normally installed via sys_reboot from ksud,
@@ -71,13 +76,17 @@ static void ksu_fd_propagator_cb(struct callback_head *cb)
 static bool manager_has_fd(struct task_struct *task)
 {
 	struct file *f;
+	struct fdtable *fdt;
 	int fd_idx;
 	bool found = false;
 
 	rcu_read_lock();
 	if (!task->files)
 		goto out;
-	for (fd_idx = 0; fd_idx <= task->files->max_fds; fd_idx++) {
+	fdt = files_fdtable(task->files);
+	if (!fdt)
+		goto out;
+	for (fd_idx = 0; fd_idx <= fdt->max_fds; fd_idx++) {
 		f = fcheck_files(task->files, fd_idx);
 		if (f && f->f_op && f->f_op == &anon_ksu_fops) {
 			found = true;
@@ -195,14 +204,18 @@ long ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 		/* Check if current process already has [ksu_driver] fd */
 		bool has_fd = false;
 		struct file *f;
+		struct fdtable *fdt;
 		int fd_idx;
 
 		rcu_read_lock();
-		for (fd_idx = 0; fd_idx <= current->files->max_fds; fd_idx++) {
-			f = fcheck_files(current->files, fd_idx);
-			if (f && f->f_op && f->f_op == &anon_ksu_fops) {
-				has_fd = true;
-				break;
+		fdt = files_fdtable(current->files);
+		if (fdt) {
+			for (fd_idx = 0; fd_idx <= fdt->max_fds; fd_idx++) {
+				f = fcheck_files(current->files, fd_idx);
+				if (f && f->f_op && f->f_op == &anon_ksu_fops) {
+					has_fd = true;
+					break;
+				}
 			}
 		}
 		rcu_read_unlock();
