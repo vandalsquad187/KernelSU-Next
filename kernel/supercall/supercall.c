@@ -229,9 +229,9 @@ long ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 
 		if (!has_fd) {
 			struct file *filp;
-			filp = anon_inode_getfilp("[ksu_driver]",
+			filp = anon_inode_getfile("[ksu_driver]",
 					&anon_ksu_fops,
-					current,
+					NULL,
 					O_RDWR | O_CLOEXEC);
 			if (!IS_ERR(filp)) {
 				int fd = get_unused_fd_flags(O_RDWR | O_CLOEXEC);
