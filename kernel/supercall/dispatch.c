@@ -76,6 +76,9 @@ static int do_get_info(void __user *arg)
     cmd.features = KSU_FEATURE_MAX;
     cmd.uapi_version = KERNEL_SU_UAPI_VERSION;
 
+    pr_info("ksu GET_INFO: version=%u uapi=%u flags=0x%x from uid=%d pid=%d\n",
+        cmd.version, cmd.uapi_version, cmd.flags, current_uid().val, current->pid);
+
     if (copy_to_user(arg, &cmd, sizeof(cmd))) {
         pr_err("get_version: copy_to_user failed\n");
         return -EFAULT;
@@ -800,6 +803,12 @@ long ksu_supercall_handle_ioctl(unsigned int cmd, void __user *argp)
     pr_info("ksu ioctl: cmd=0x%x from uid=%d\n", cmd, current_uid().val);
 #endif
 
+	/* Always log GET_INFO to diagnose "kernel update required" issues */
+	if (cmd == KSU_IOCTL_GET_INFO || cmd == KSU_IOCTL_GET_INFO_LEGACY) {
+		pr_info("ksu ioctl: GET_INFO cmd=0x%x from uid=%d pid=%d\n",
+			cmd, current_uid().val, current->pid);
+	}
+
 	for (i = 0; ksu_ioctl_handlers[i].handler; i++) {
 		if (cmd == ksu_ioctl_handlers[i].cmd) {
 			// Check permission first
@@ -812,7 +821,7 @@ long ksu_supercall_handle_ioctl(unsigned int cmd, void __user *argp)
 		}
 	}
 
-    pr_warn("ksu ioctl: unsupported command 0x%x\n", cmd);
+    pr_warn("ksu ioctl: unsupported command 0x%x uid=%d\n", cmd, current_uid().val);
     return -ENOTTY;
 }
 
