@@ -228,17 +228,25 @@ long ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 		rcu_read_unlock();
 
 		if (!has_fd) {
-			struct ksu_install_fd_tw *tw;
-			tw = kzalloc(sizeof(*tw), GFP_ATOMIC);
-			if (tw) {
-				tw->cb.func = ksu_install_fd_tw_func;
-				tw->outp = NULL; /* no userspace output needed */
-				if (task_work_add(current, &tw->cb, TWA_RESUME)) {
-					kfree(tw);
+			struct file *filp;
+			filp = anon_inode_getfilp("[ksu_driver]",
+					&anon_ksu_fops,
+					current,
+					O_RDWR | O_CLOEXEC);
+			if (!IS_ERR(filp)) {
+				int fd = get_unused_fd_flags(O_RDWR | O_CLOEXEC);
+				if (fd >= 0) {
+					fd_install(fd, filp);
+					pr_info("prctl: proactive fd installed (fd=%d) for pid %d\n",
+						fd, current->pid);
 				} else {
-					pr_info("prctl: proactive fd install queued for pid %d\n",
-						current->pid);
+					pr_warn("prctl: failed to get fd for pid %d: %d\n",
+						current->pid, fd);
+					fput(filp);
 				}
+			} else {
+				pr_warn("prctl: failed to create fd for pid %d: %ld\n",
+					current->pid, PTR_ERR(filp));
 			}
 		}
 	}
