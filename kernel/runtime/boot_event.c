@@ -9,6 +9,7 @@
 #include "runtime/ksud_boot.h"
 #include "runtime/ksud.h"
 #include "manager/manager_observer.h"
+#include "manager/manager_identity.h"
 #include "manager/throne_tracker.h"
 #include "supercall/supercall.h"
 
