@@ -3,6 +3,7 @@
 #include <linux/fs.h>
 #include <linux/namei.h>
 #include <linux/printk.h>
+#include <linux/workqueue.h>
 
 #include "policy/allowlist.h"
 #include "klog.h" // IWYU pragma: keep
@@ -18,37 +19,76 @@ bool ksu_boot_completed __read_mostly = false;
 
 extern void ksu_avc_spoof_late_init(void);
 
-void on_post_fs_data(void)
+/*
+ * Heavy post-fs-data work that must NOT run inside the execve syscall hook.
+ * On 4.14, zygote's execve calls on_post_fs_data() synchronously — if
+ * track_throne_now() does heavy I/O (filp_open, search_manager), init's
+ * execve blocks and the boot hangs at ~95%.
+ *
+ * Split into light (flags + quick inits) and heavy (I/O + process scan).
+ * The heavy part runs in a workqueue thread.
+ */
+static void post_fs_data_heavy_work(struct work_struct *work)
 {
-    static bool done = false;
+    pr_info("on_post_fs_data: heavy work start\n");
 
-    if (done) {
-        pr_info("on_post_fs_data already done\n");
-        return;
-    }
-
-    done = true;
-    pr_info("on_post_fs_data!\n");
-
+    /* These do file I/O and process scanning — safe in workqueue context */
     ksu_load_allow_list();
     ksu_observer_init();
-    // Sanity check for safe mode only needs early-boot input samples.
     ksu_stop_input_hook_runtime();
     ksu_selinux_hide_handle_post_fs_data();
 
     /* Early Manager UID detection + FD propagation.
      * At post-fs-data, /data is mounted and packages.list is available.
-     * By calling track_throne_now() here, we identify the Manager UID
-     * before the Manager app starts (zygote hasn't forked it yet).
-     * Then the propagator thread polls for Manager processes and installs
-     * the [ksu_driver] fd via task_work(TWA_RESUME), which executes on
-     * the Manager's first return to userspace — before any Java code runs.
-     * This ensures the fd is available when Compose init calls getVersion(). */
+     * track_throne_now() identifies the Manager UID before the Manager
+     * app starts (zygote hasn't forked it yet). */
     track_throne_now(false);
     if (ksu_is_manager_appid_valid())
         pr_info("on_post_fs_data: manager detected early, appid=%d\n",
                 ksu_get_manager_appid());
     ksu_start_fd_propagator();
+
+    pr_info("on_post_fs_data: heavy work done\n");
+}
+
+static DECLARE_WORK(post_fs_data_work, post_fs_data_heavy_work);
+
+static bool post_fs_data_done = false;
+
+void on_post_fs_data(void)
+{
+    if (post_fs_data_done) {
+        pr_info("on_post_fs_data already done\n");
+        return;
+    }
+
+    post_fs_data_done = true;
+    pr_info("on_post_fs_data!\n");
+
+    /*
+     * Schedule heavy I/O work asynchronously so we never block the execve
+     * syscall that triggers this.  dispatch.c (ksud supercall) also calls
+     * this, but by then the work is already queued or finished.
+     */
+    schedule_work(&post_fs_data_work);
+}
+
+/*
+ * Async entry point for the execve hook path.
+ * Sets the done flag immediately to prevent re-entry, then schedules
+ * the heavy work.  Returns instantly so zygote's execve is not blocked.
+ */
+void on_post_fs_data_async(void)
+{
+    if (post_fs_data_done) {
+        pr_info("on_post_fs_data_async: already done\n");
+        return;
+    }
+
+    post_fs_data_done = true;
+    pr_info("on_post_fs_data (async from execve hook)!\n");
+
+    schedule_work(&post_fs_data_work);
 }
 
 extern void ext4_unregister_sysfs(struct super_block *sb);

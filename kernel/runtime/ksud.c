@@ -41,20 +41,8 @@ static inline void ksu_disable_vfs_read_branch()
 static inline void ksu_disable_vfs_read_branch() { } // no-op
 #endif
 
-void on_post_fs_data(void)
-{
-	static bool done = false;
-	if (done) {
-		pr_info("on_post_fs_data already done\n");
-		return;
-	}
-	done = true;
-	pr_info("on_post_fs_data!\n");
-
-	ksu_load_allow_list();
-	// sanity check, this may influence the performance
-	stop_input_hook();
-}
+// on_post_fs_data() moved to runtime/boot_event.c (with async workqueue support).
+// Do NOT define it here — boot_event.o is compiled separately via Kbuild.
 
 extern void ext4_unregister_sysfs(struct super_block *sb);
 int nuke_ext4_sysfs(const char *mnt)

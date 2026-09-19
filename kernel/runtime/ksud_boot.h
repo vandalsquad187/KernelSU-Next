@@ -4,6 +4,7 @@
 #include <linux/types.h>
 
 void on_post_fs_data(void);
+void on_post_fs_data_async(void);
 void on_module_mounted(void);
 void on_boot_completed(void);
 

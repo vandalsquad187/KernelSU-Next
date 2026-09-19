@@ -184,7 +184,7 @@ void ksu_handle_execveat_ksud(const char *path, struct user_arg_ptr *argv)
         char buf[16];
         if (check_argv(*argv, 1, "-Xzygote", buf, sizeof(buf))) {
             pr_info("exec zygote, /data prepared, second_stage: %d\n", init_second_stage_executed);
-            on_post_fs_data();
+            on_post_fs_data_async();
             first_zygote = false;
             ksu_stop_ksud_execve_hook();
         }
