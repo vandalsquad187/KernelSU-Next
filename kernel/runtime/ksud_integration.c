@@ -158,6 +158,45 @@ fail:
     return false;
 }
 
+/*
+ * Deferred boot work — runs in workqueue context, NOT in execve syscall hook.
+ *
+ * On 4.14, calling apply_kernelsu_rules() synchronously inside the execve
+ * hook blocks init's execve and can hang the boot at ~95% (race with SELinux
+ * policy loading + stop_machine).  OrangeFox "Fix SELinux contexts" confirms
+ * the in-memory policy modification at the wrong time corrupts boot.
+ *
+ * The execve hook just sets flags and schedules this work.  init's execve
+ * returns instantly, zygote starts normally, and the heavy SELinux/ksud
+ * setup runs in a kernel worker thread.
+ */
+static bool ksu_second_stage_detected = false;
+static bool ksu_zygote_detected = false;
+
+static void ksu_boot_work_fn(struct work_struct *work)
+{
+    /* Phase 1: init second_stage — SELinux rules + cred setup */
+    if (ksu_second_stage_detected) {
+        ksu_second_stage_detected = false;
+        pr_info("ksu_boot_work: second_stage — applying SELinux rules\n");
+        ksu_selinux_hide_handle_second_stage();
+        apply_kernelsu_rules();
+        cache_sid();
+        setup_ksu_cred();
+        pr_info("ksu_boot_work: second_stage — rules applied\n");
+    }
+
+    /* Phase 2: zygote start — post-fs-data work (allow list, throne tracker, etc.) */
+    if (ksu_zygote_detected) {
+        ksu_zygote_detected = false;
+        pr_info("ksu_boot_work: zygote — running on_post_fs_data\n");
+        on_post_fs_data();
+        pr_info("ksu_boot_work: zygote — done\n");
+    }
+}
+
+static DECLARE_WORK(ksu_boot_work, ksu_boot_work_fn);
+
 void ksu_handle_execveat_ksud(const char *path, struct user_arg_ptr *argv)
 {
     static const char app_process[] = "/system/bin/app_process";
@@ -171,22 +210,21 @@ void ksu_handle_execveat_ksud(const char *path, struct user_arg_ptr *argv)
     if (unlikely(!memcmp(path, system_bin_init, sizeof(system_bin_init) - 1) && argv)) {
         char buf[16];
         if (!init_second_stage_executed && check_argv(*argv, 1, "second_stage", buf, sizeof(buf))) {
-            pr_info("/system/bin/init second_stage executed\n");
-            ksu_selinux_hide_handle_second_stage();
-            apply_kernelsu_rules();
-            cache_sid();
-            setup_ksu_cred();
+            pr_info("/system/bin/init second_stage executed (deferred)\n");
+            ksu_second_stage_detected = true;
             init_second_stage_executed = true;
+            schedule_work(&ksu_boot_work);
         }
     }
 
     if (unlikely(first_zygote && !memcmp(path, app_process, sizeof(app_process) - 1) && argv)) {
         char buf[16];
         if (check_argv(*argv, 1, "-Xzygote", buf, sizeof(buf))) {
-            pr_info("exec zygote, /data prepared, second_stage: %d\n", init_second_stage_executed);
-            on_post_fs_data_async();
+            pr_info("exec zygote detected (deferred), /data prepared, second_stage: %d\n", init_second_stage_executed);
+            ksu_zygote_detected = true;
             first_zygote = false;
             ksu_stop_ksud_execve_hook();
+            schedule_work(&ksu_boot_work);
         }
     }
 }
