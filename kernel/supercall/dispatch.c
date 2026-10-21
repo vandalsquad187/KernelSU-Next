@@ -34,6 +34,11 @@
 #include "supercall/supercall.h"
 #include "infra/symbol_resolver.h"
 #include "preinit/preinit.h"
+#include "../runtime/ksud_boot.h"
+#include "../supercall/internal.h"
+#include "../hook/tp_marker.h"
+#include "../infra/file_wrapper.h"
+#include "../feature/kernel_umount.h"
 
 static int do_grant_root(void __user *arg)
 {
@@ -528,7 +533,7 @@ static int do_nuke_ext4_sysfs(void __user *arg)
 
     memset(mnt, 0, sizeof(mnt));
 
-    ret = strncpy_from_user(mnt, cmd.arg, sizeof(mnt));
+    ret = strncpy_from_user(mnt, (const char __user *)(unsigned long)cmd.arg, sizeof(mnt));
     if (ret < 0) {
         pr_err("nuke ext4 copy mnt failed: %ld\n", ret);
         return -EFAULT;
