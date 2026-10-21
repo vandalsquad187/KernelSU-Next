@@ -357,10 +357,18 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 		return;
 	}
 
-	// virtual mapping of a physical page 
+	// virtual mapping of a physical page
 	struct page *page = phys_to_page(__pa(base));
 	if (!page)
 		return;
+
+	// snapshot the original handler first via a safe read, so old_ptr
+	// is valid even when the verify below forces a retry
+	void *orig = NULL, *verify = NULL;
+	if (copy_from_kernel_nofault(&orig, syscall_slot_addr, sizeof(void *)) || !orig) {
+		pr_err("%s: syscall #%d snapshot read failed, aborting patch\n", __func__, syscall_nr);
+		return;
+	}
 
 	// create a "writabel address" which is mapped to teh same address
 	void *writable_addr = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
@@ -373,7 +381,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	preempt_disable();
 	local_irq_disable();
 
-	*(void **)old_ptr = *target_slot; 
+	*(void **)old_ptr = orig;
 
 	*target_slot = new_ptr;
 	smp_mb(); // ^^
@@ -383,7 +391,40 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 
 	vunmap(writable_addr);
 
-	smp_mb(); 
+	smp_mb();
+
+	// verify through the real slot; a few surviving platforms race the
+	// first alias write, and silent half-applied hooks (notably prctl on
+	// 4.14) broke Manager detection without any sign in dmesg
+	{
+		int attempt;
+		for (attempt = 0; attempt < 3; attempt++) {
+			verify = NULL;
+			if (!copy_from_kernel_nofault(&verify, syscall_slot_addr, sizeof(void *))) {
+				if (verify == new_ptr) {
+					return;
+				}
+			}
+			if (attempt < 2) {
+				writable_addr = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
+				if (!writable_addr)
+					break;
+				target_slot = (void **)((unsigned long)writable_addr + offset);
+				preempt_disable();
+				local_irq_disable();
+				*target_slot = new_ptr;
+				smp_mb();
+				local_irq_enable();
+				preempt_enable();
+				vunmap(writable_addr);
+				smp_mb();
+			}
+		}
+		pr_err("%s: syscall #%d patch verify FAILED (slot 0x%lx reads 0x%lx, expected 0x%lx)\n",
+		       __func__, syscall_nr, (long)syscall_slot_addr, (long)verify, (long)new_ptr);
+	}
+
+	smp_mb();
 }
 
 static void restore_syscall(void *old_ptr, unsigned long syscall_nr, void *new_ptr, void *target_table)

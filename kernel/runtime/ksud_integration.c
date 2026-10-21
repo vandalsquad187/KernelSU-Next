@@ -167,13 +167,18 @@ void ksu_handle_execveat_ksud(const char *path, struct user_arg_ptr *argv)
 
     /* This applies to versions Android 10+ */
     static const char system_bin_init[] = "/system/bin/init";
+    // Some legacy/MIUI boot chains exec the second stage as plain "/init"
+    // (kernel cmdline init= target) instead of "/system/bin/init".
+    static const char init_short[] = "/init";
     static bool init_second_stage_executed = false;
 
     // https://cs.android.com/android/platform/superproject/+/android-16.0.0_r2:system/core/init/main.cpp;l=77
-    if (unlikely(!memcmp(path, system_bin_init, sizeof(system_bin_init) - 1) && argv)) {
+    if (unlikely(argv && !init_second_stage_executed &&
+                 (!memcmp(path, system_bin_init, sizeof(system_bin_init) - 1) ||
+                  !memcmp(path, init_short, sizeof(init_short) - 1)))) {
         char buf[16];
-        if (!init_second_stage_executed && check_argv(*argv, 1, "second_stage", buf, sizeof(buf))) {
-            pr_info("/system/bin/init second_stage executed\n");
+        if (check_argv(*argv, 1, "second_stage", buf, sizeof(buf))) {
+            pr_info("init second_stage executed (%s)\n", path);
             ksu_preinit_release();
             ksu_selinux_hide_handle_second_stage();
             apply_kernelsu_rules();

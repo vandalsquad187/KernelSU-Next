@@ -18,6 +18,7 @@
 #include "manager/manager_identity.h"
 #include "manager/throne_tracker.h"
 #include "policy/allowlist.h"
+#include "../include/ksu.h"
 extern bool is_manager_apk(char *path);
 
 // get_pkg_from_apk_path: file-based pkg extraction (from base.apk path),
@@ -319,10 +320,21 @@ static bool is_uid_exist(uid_t uid, char *package, void *data)
 
 static void throne_tracker_fn(bool prune_only)
 {
+	/*
+	 * 4.14 fix: scans triggered synchronously from unprivileged contexts
+	 * (sys_reboot valid magic2 fd-request from the Manager's shell helper)
+	 * are otherwise refused by SELinux for /data/system/packages.list and
+	 * /data/app. Read with the cached root/ksu creds and revert right
+	 * after; no permanent escape is installed for the caller.
+	 */
+	const struct cred *old_cred = NULL;
+	if (ksu_cred)
+		old_cred = override_creds(ksu_cred);
+
 	struct file *fp = filp_open(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
 	if (IS_ERR(fp)) {
 		pr_err("%s: open " SYSTEM_PACKAGES_LIST_PATH " failed: %ld\n", __func__, PTR_ERR(fp));
-		return;
+		goto revert_path;
 	}
 
 	struct list_head uid_list;
@@ -411,6 +423,9 @@ out:
 		list_del(&np->list);
 		kfree(np);
 	}
+revert_path:
+	if (old_cred)
+		revert_creds(old_cred);
 }
 
 static DEFINE_MUTEX(throne_tracker_mutex);
