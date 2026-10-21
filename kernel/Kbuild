@@ -31,7 +31,8 @@ else ifeq ($(CONFIG_RISCV),y)
 kernelsu-objs += hook/riscv64/patch_memory.o
 kernelsu-objs += hook/riscv64/syscall_hook.o
 endif
-# extras.o removed: extras.c deleted upstream (avc spoof replaced by selinux_hide), stale ref breaks 4.14 build (No rule extras.o)
+# extras.o: upstream avc_spoof feature handler + slow_avc_audit kprobe (4.14-Guards via #ifdef KSU_X86_PATCH)
+kernelsu-objs += extras.o
 
 kernelsu-objs += infra/file_wrapper.o
 kernelsu-objs += infra/event_queue.o
