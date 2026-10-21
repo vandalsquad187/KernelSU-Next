@@ -13,6 +13,7 @@
 
 #include "arch.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 #if defined(__aarch64__)
 #define KSU_SYS_PREFIX(name) __arm64_sys_##name
 #elif defined(__x86_64__)
@@ -42,16 +43,17 @@ static_assert(1 == 0, "Unsupported architecture!");
         PT_REGS_PARM6(&__ksu_regs) = (unsigned long)(f);                                                               \
         (long)KSU_SYS_PREFIX(name)(&__ksu_regs);                                                                       \
     })
+#else /* < 4.20: pre-wrapper sys_* ABI, prototypes come from linux/syscalls.h */
+#define ksyscall_0(name) sys_##name()
+#define ksyscall_1(name, a) sys_##name(a)
+#define ksyscall_2(name, a, b) sys_##name(a, b)
+#define ksyscall_3(name, a, b, c) sys_##name(a, b, c)
+#define ksyscall_4(name, a, b, c, d) sys_##name(a, b, c, d)
+#define ksyscall_5(name, a, b, c, d, e) sys_##name(a, b, c, d, e)
+#define ksyscall_6(name, a, b, c, d, e, f) sys_##name(a, b, c, d, e, f)
+#endif
 
 // https://elixir.bootlin.com/musl/v1.2.6/source/src/internal/syscall.h#L45
-#define ksyscall_0(name) __ksyscall(name, 0, 0, 0, 0, 0, 0)
-#define ksyscall_1(name, a) __ksyscall(name, a, 0, 0, 0, 0, 0)
-#define ksyscall_2(name, a, b) __ksyscall(name, a, b, 0, 0, 0, 0)
-#define ksyscall_3(name, a, b, c) __ksyscall(name, a, b, c, 0, 0, 0)
-#define ksyscall_4(name, a, b, c, d) __ksyscall(name, a, b, c, d, 0, 0)
-#define ksyscall_5(name, a, b, c, d, e) __ksyscall(name, a, b, c, d, e, 0)
-#define ksyscall_6(name, a, b, c, d, e, f) __ksyscall(name, a, b, c, d, e, f)
-
 #define __ksyscall_arg_n(_1, _2, _3, _4, _5, _6, _7, N, ...) N
 #define __ksyscall_count_args(...) __ksyscall_arg_n(__VA_ARGS__, 6, 5, 4, 3, 2, 1, 0)
 #define __ksyscall_concat(a, b) a##b
