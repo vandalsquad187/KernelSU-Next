@@ -1,9 +1,11 @@
 #include "linux/file.h"
 #include "linux/fcntl.h"
 #include "linux/namei.h"
+#include <linux/version.h>
 #include <linux/compiler_types.h>
 #include <linux/preempt.h>
 #include <linux/printk.h>
+#include "kernel_compat.h"
 #include <linux/mm.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
 #include <linux/pgtable.h>

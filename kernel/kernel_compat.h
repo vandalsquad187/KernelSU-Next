@@ -104,6 +104,12 @@ extern long copy_from_user_nofault(void *dst, const void __user *src, size_t siz
 #define copy_to_user_nofault(dst, src, len) copy_to_user(dst, src, len)
 #endif
 #endif
+// 4.14 compat: strncpy_from_user_nofault only since 5.8, fallback to plain strncpy_from_user
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+#ifndef strncpy_from_user_nofault
+#define strncpy_from_user_nofault(dst, src, len) strncpy_from_user(dst, src, len)
+#endif
+#endif
 static __always_inline long ksu_copy_from_user_retry(void *to, const void __user *from, unsigned long count)
 {
 	long ret = copy_from_user_nofault(to, from, count);
