@@ -175,6 +175,12 @@ void ksu_start_fd_propagator(void)
 /* ---- End FD Propagator ---- */
 
 /* FD install task_work struct — must be defined before ksu_handle_prctl */
+#define KSU_DRIVER_PERMISSION_SU_SESSION (1UL << 0)
+
+struct ksu_driver_context {
+    unsigned long permissions;
+};
+
 struct ksu_install_fd_tw {
 	struct callback_head cb;
 	int __user *outp;
@@ -293,13 +299,14 @@ static inline void tiny_sulog_init_heap(void) {}
 
 static int anon_ksu_release(struct inode *inode, struct file *filp)
 {
-	pr_info("ksu fd released\n");
-	return 0;
+    kfree(filp->private_data);
+    pr_info("ksu fd released\n");
+    return 0;
 }
 
 static long anon_ksu_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	return ksu_supercall_handle_ioctl(cmd, (void __user *)arg);
+    return ksu_supercall_handle_ioctl(filp, cmd, (void __user *)arg);
 }
 
 // File operations structure
@@ -310,26 +317,34 @@ static const struct file_operations anon_ksu_fops = {
 	.release = anon_ksu_release,
 };
 
-// Install KSU fd to current process
-int ksu_install_fd(void)
+static int ksu_install_fd_with_permissions(unsigned int fd_flags, unsigned long permissions)
 {
-	struct file *filp;
-	int fd;
+    struct ksu_driver_context *context;
+    struct file *filp;
+    const char *name;
+    int fd;
 
-	// Get unused fd
-	fd = get_unused_fd_flags(O_CLOEXEC);
-	if (fd < 0) {
-		pr_err("ksu_install_fd: failed to get unused fd\n");
-		return fd;
-	}
+    context = kzalloc(sizeof(*context), GFP_KERNEL);
+    if (!context)
+        return -ENOMEM;
 
-	// Create anonymous inode file
-	filp = anon_inode_getfile("[ksu_driver]", &anon_ksu_fops, NULL, O_RDWR | O_CLOEXEC);
-	if (IS_ERR(filp)) {
-		pr_err("ksu_install_fd: failed to create anon inode file\n");
-		put_unused_fd(fd);
-		return PTR_ERR(filp);
-	}
+    context->permissions = permissions;
+    name = permissions & KSU_DRIVER_PERMISSION_SU_SESSION ? "[ksu_driver_su]" : "[ksu_driver]";
+
+    fd = get_unused_fd_flags(fd_flags);
+    if (fd < 0) {
+        pr_err("ksu_install_fd: failed to get unused fd\n");
+        kfree(context);
+        return fd;
+    }
+
+    filp = anon_inode_getfile(name, &anon_ksu_fops, context, O_RDWR);
+    if (IS_ERR(filp)) {
+        pr_err("ksu_install_fd: failed to create anon inode file\n");
+        put_unused_fd(fd);
+        kfree(context);
+        return PTR_ERR(filp);
+    }
 
 	// Install fd
 	fd_install(fd, filp);
@@ -339,7 +354,23 @@ int ksu_install_fd(void)
 	return fd;
 }
 
-/* struct ksu_install_fd_tw defined earlier, before ksu_handle_prctl */
+int ksu_install_fd(void)
+{
+    return ksu_install_fd_with_permissions(O_CLOEXEC, 0);
+}
+
+int ksu_install_su_fd(void)
+{
+    // This descriptor must be installed after the exec into ksud.
+    return ksu_install_fd_with_permissions(O_CLOEXEC, KSU_DRIVER_PERMISSION_SU_SESSION);
+}
+
+bool ksu_is_su_session_fd(const struct file *filp)
+{
+    const struct ksu_driver_context *context = filp->private_data;
+
+    return context && (context->permissions & KSU_DRIVER_PERMISSION_SU_SESSION);
+}
 
 static void ksu_install_fd_tw_func(struct callback_head *cb)
 {

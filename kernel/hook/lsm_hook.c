@@ -341,9 +341,14 @@ int ksu_lsm_hook(struct ksu_lsm_hook *hook)
                 } else {
                     selected_entry = &hook->list;
                     hook->list.head = head;
-                    INIT_LIST_HEAD(&hook->list.list);
-                    list_add(&hook->list.list, head);
+                    hook->list.list.next = NULL;
+                    hook->list.list.pprev = &head->first;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+                    static const struct lsm_id ksu_lsm_id = { .name = "ksu", .id = 0 };
+                    hook->list.lsmid = &ksu_lsm_id;
+#else
                     hook->list.lsm = "ksu";
+#endif
                     *(void **)((char *)selected_entry + hook->hook_offset) = hook->replacement;
                     selected_slot = (void **)((char *)selected_entry + hook->hook_offset);
                     selected_origin = NULL;

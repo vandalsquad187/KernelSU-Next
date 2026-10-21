@@ -1,6 +1,7 @@
 package com.rifsxd.ksunext.ui.screen
 
 import android.app.Activity.RESULT_OK
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,6 +32,7 @@ import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import com.ramcosta.composedestinations.navigation.EmptyDestinationsNavigator
 import com.rifsxd.ksunext.R
 import com.rifsxd.ksunext.ksuApp
+import com.rifsxd.ksunext.ui.LocalNavBarEnabled
 import com.rifsxd.ksunext.ui.LocalScrollState
 import com.rifsxd.ksunext.ui.component.rememberLoadingDialog
 import com.rifsxd.ksunext.ui.rememberScrollConnection
@@ -122,7 +124,7 @@ private suspend fun restoreModulesFromUri(uri: Uri): Boolean = withContext(Dispa
         return@withContext false
     }
 
-    val extractCmd = "$BUSYBOX tar -xpf '$tmpPath' -C /data/adb/modules_update"
+    val extractCmd = "mkdir -p '/data/adb/modules_update' && $BUSYBOX tar -xpf '$tmpPath' -C /data/adb/modules_update"
     val result = ShellUtils.fastCmdResult(extractCmd)
 
     SuFile(tmpPath).delete()
@@ -165,7 +167,8 @@ fun BackupRestoreScreen(navigator: DestinationsNavigator) {
     val snackBarHost = LocalSnackbarHost.current
 
     val scrollState = LocalScrollState.current
-    val isNavBarHidden = scrollState?.isScrollingDown?.value ?: false
+    val navBarEnabled = LocalNavBarEnabled.current
+    val isNavBarHidden = (scrollState?.isScrollingDown?.value ?: false) || (navBarEnabled?.value == false)
     val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + if (isNavBarHidden) 0.dp else 112.dp
 
     Scaffold(
@@ -188,9 +191,11 @@ fun BackupRestoreScreen(navigator: DestinationsNavigator) {
         )
     ) { paddingValues ->
         val loadingDialog = rememberLoadingDialog()
-        val context       = LocalContext.current
+        val context: Context = LocalContext.current
         val scope         = rememberCoroutineScope()
-
+        val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val softRebootAfterModuleFlash = prefs.getBoolean("soft_reboot_after_module_flash", false)
+        
         // Track which backup/restore type was last requested so the single
         // launcher knows what to do when the file-picker returns.
         val lastBackupType  = rememberSaveable { mutableStateOf("module") }
@@ -245,7 +250,7 @@ fun BackupRestoreScreen(navigator: DestinationsNavigator) {
                         duration = SnackbarDuration.Long
                     )
                     if (result == SnackbarResult.ActionPerformed) {
-                        reboot()
+                        reboot(if (softRebootAfterModuleFlash) "soft-reboot" else "")
                     }
                 } else {
                     snackBarHost.showSnackbar(

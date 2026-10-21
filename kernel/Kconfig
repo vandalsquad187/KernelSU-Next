@@ -132,4 +132,12 @@ config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
 
 endif
 
+config KSU_X86_PATCH_SYSCALL_DISPATCHER
+	bool "Dynamically patch x64's hardened syscall dispatcher to support syscall hooks"
+	depends on KSU && X86_64
+	default n
+	help
+	  Dynamically patch x64's hardened syscall dispatcher to support syscall hooks. This is a
+	  replacement for a kernel source code patch, and is useful for x86_64 LKM mode.
+
 endmenu

@@ -46,6 +46,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import com.rifsxd.ksunext.ui.LocalNavBarEnabled
 import com.rifsxd.ksunext.ui.LocalScrollState
 import com.rifsxd.ksunext.ui.rememberScrollConnection
 import androidx.compose.ui.res.stringResource
@@ -147,6 +148,12 @@ fun ModuleScreen(navigator: DestinationsNavigator) {
 
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
 
+        // auto-detect: an AnyKernel3 zip picked here flashes as a kernel
+        if (uris.size == 1 && ZipUtils.isAnyKernel3Zip(context, uris.first())) {
+            navigator.navigate(FlashScreenDestination(FlashIt.FlashAnyKernel(uris.first())))
+            return@rememberLauncherForActivityResult
+        }
+
         viewModel.updateZipUris(uris)
 
         navigator.navigate(FlashScreenDestination(FlashIt.FlashModules(uris)))
@@ -157,7 +164,8 @@ fun ModuleScreen(navigator: DestinationsNavigator) {
     val listState = rememberLazyListState()
 
     val scrollState = LocalScrollState.current
-    val isNavBarHidden = scrollState?.isScrollingDown?.value ?: false
+    val navBarEnabled = LocalNavBarEnabled.current
+    val isNavBarHidden = (scrollState?.isScrollingDown?.value ?: false) || (navBarEnabled?.value == false)
     val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + if (isNavBarHidden) 0.dp else 112.dp
 
     Scaffold(
@@ -484,10 +492,12 @@ fun ModuleScreen(navigator: DestinationsNavigator) {
                     onClickModule = { id, name, hasWebUi ->
                         if (hasWebUi) {
                             webUILauncher.launch(
-                                Intent(context, WebUIActivity::class.java)
-                                    .setData("kernelsu://webui/$id".toUri())
-                                    .putExtra("id", id)
-                                    .putExtra("name", name)
+                                Intent(context, WebUIActivity::class.java).apply {
+                                    putExtra("is_internal_transition", true)
+                                    setData("kernelsu://webui/$id".toUri())
+                                    putExtra("id", id)
+                                    putExtra("name", name)
+                                }
                             )
                         }
                     },
@@ -538,6 +548,7 @@ private fun ModuleList(
     val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     val developerOptionsEnabled = prefs.getBoolean("enable_developer_options", false)
+    val softRebootAfterModuleFlash = prefs.getBoolean("soft_reboot_after_module_flash", false)
 
     val loadingDialog = rememberLoadingDialog()
     val confirmDialog = rememberConfirmDialog()
@@ -643,7 +654,7 @@ private fun ModuleList(
             duration = SnackbarDuration.Long
         )
         if (result == SnackbarResult.ActionPerformed) {
-            reboot()
+            reboot(if (softRebootAfterModuleFlash) "soft-reboot" else "")
         }
     }
 
@@ -671,15 +682,19 @@ private fun ModuleList(
             failedRestore.format(module.name)
         }
     }
+
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     PullToRefreshBox(
         modifier = boxModifier,
         isRefreshing = viewModel.isRefreshing,
         onRefresh = {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
             viewModel.fetchModuleList()
         }
     ) {
         val scrollState = LocalScrollState.current
-        val isNavBarHidden = scrollState?.isScrollingDown?.value ?: false
+        val navBarEnabled = LocalNavBarEnabled.current
+        val isNavBarHidden = (scrollState?.isScrollingDown?.value ?: false) || (navBarEnabled?.value == false)
         val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + if (isNavBarHidden) 0.dp else 112.dp
 
         LazyColumn(
@@ -741,7 +756,7 @@ private fun ModuleList(
                                             duration = SnackbarDuration.Long
                                         )
                                         if (result == SnackbarResult.ActionPerformed) {
-                                            reboot()
+                                            reboot(if (softRebootAfterModuleFlash) "soft-reboot" else "")
                                         }
                                     } else {
                                         val message =
@@ -798,6 +813,7 @@ fun ModuleItem(
     onExpandToggle: () -> Unit,
 ) {
     val viewModel = viewModel<ModuleViewModel>()
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     var showMenu by remember { mutableStateOf(false) }
     var showShortcutDialog by remember { mutableStateOf(false) }
     var shortcutType by remember { mutableStateOf("") }
@@ -825,8 +841,6 @@ fun ModuleItem(
         return p
     }
     
-    val haptic = LocalHapticFeedback.current
-
     val context = LocalContext.current
 
     if (showShortcutDialog) {
@@ -941,8 +955,8 @@ fun ModuleItem(
             .combinedClickable(
                 onClick = onExpandToggle,
                 onLongClick = {
-                    showMenu = true
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showMenu = true
                 }
             )
     ) {
@@ -1186,6 +1200,15 @@ fun ModuleItem(
                                 )
                             )
                         }
+                        module.preinitWarning()?.let {
+                            LabelItem(
+                                text = stringResource(it),
+                                style = LabelItemDefaults.style.copy(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            )
+                        }
                         if (module.enabled && !module.remove) {
                             if (module.hasWebUi && filterZygiskModules) {
                                 LabelItem(
@@ -1308,7 +1331,7 @@ fun ModuleItem(
                                             val intent = Intent(Intent.ACTION_VIEW, donateUrl.toUri())
                                             ctx.startActivity(intent)
                                         } catch (e: Exception) {
-                                            Toast.makeText(ctx, "Invalid donate url", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(ctx, ctx.getString(R.string.module_invalid_donate_url), Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     contentPadding = ButtonDefaults.TextButtonContentPadding

@@ -28,11 +28,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.text.BidiFormatter
 import androidx.lifecycle.compose.dropUnlessResumed
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import com.ramcosta.composedestinations.navigation.EmptyDestinationsNavigator
+import com.rifsxd.ksunext.Natives
 import com.rifsxd.ksunext.R
 import com.rifsxd.ksunext.ui.component.ConfirmResult
 import com.rifsxd.ksunext.ui.component.KeyEventBlocker
@@ -45,9 +47,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
+import java.io.BufferedInputStream
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.zip.ZipInputStream
 
 enum class FlashingStatus {
     FLASHING,
@@ -67,14 +71,16 @@ fun flashModulesSequentially(
     onStdout: (String) -> Unit,
     onStderr: (String) -> Unit
 ): FlashResult {
+    var needsReboot = false
     for (uri in uris) {
         flashModule(uri, onStdout, onStderr).apply {
+            needsReboot = needsReboot || showReboot
             if (code != 0) {
-                return FlashResult(code, err, showReboot)
+                return FlashResult(code, err, needsReboot)
             }
         }
     }
-    return FlashResult(0, "", true)
+    return FlashResult(0, "", needsReboot)
 }
 
 /**
@@ -106,6 +112,7 @@ fun FlashScreen(
 
     val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
     val developerOptionsEnabled = prefs.getBoolean("enable_developer_options", false)
+    val softRebootAfterModuleFlash = prefs.getBoolean("soft_reboot_after_module_flash", false)
 
     val activity = context.findActivity()
 
@@ -134,11 +141,19 @@ fun FlashScreen(
         when {
             flashIt is FlashIt.FlashModules && !confirmed -> {
                 val uris = flashIt.uris
-                val moduleNames =
-                    uris.mapIndexed { index, uri -> "\n${index + 1}. ${uri.getFileName(context)}" }
-                        .joinToString("")
-                val confirmContent =
-                    context.getString(R.string.module_install_prompt_with_name, moduleNames)
+                val modules = withContext(Dispatchers.IO) {
+                    uris.map { uri -> uri.getModuleMetadata(context) }
+                }
+                val moduleDetails = modules.mapIndexed { index, module ->
+                    buildString {
+                        append("${index + 1}. ${module.fileName}\n")
+                        append("- ${context.getString(R.string.module_id)}: ${module.id}\n")
+                        append("- ${context.getString(R.string.module)}: ${module.name}\n")
+                        append("- ${context.getString(R.string.module_version)}: ${module.version}\n")
+                        append("- ${context.getString(R.string.module_author)}: ${module.author}\n")
+                    }
+                }.joinToString("\n\n")
+                val confirmContent = moduleDetails
                 val confirmTitle = context.getString(R.string.module)
                 val result = confirmDialog.awaitConfirm(
                     title = confirmTitle,
@@ -194,7 +209,7 @@ fun FlashScreen(
                 logContent.append(it).append("\n")
             }).apply {
                 if (code != 0) {
-                    text += "Error code: $code.\n $err Please save and check the log.\n"
+                    text += context.getString(R.string.flash_error_output, code, err)
                 }
                 if (showReboot) {
                     text += "\n\n\n"
@@ -221,20 +236,20 @@ fun FlashScreen(
                             "KernelSU_Next_install_log_${date}.log"
                         )
                         file.writeText(logContent.toString())
-                        snackBarHost.showSnackbar("Log saved to ${file.absolutePath}")
+                        snackBarHost.showSnackbar(context.getString(R.string.log_saved_to, BidiFormatter.getInstance().unicodeWrap(file.absolutePath)))
                     }
                 },
                 scrollBehavior = scrollBehavior
             )
         },
         floatingActionButton = {
-            if (flashIt is FlashIt.FlashModules && (flashing == FlashingStatus.SUCCESS)) {
+            if (flashIt is FlashIt.FlashModules && (flashing == FlashingStatus.SUCCESS) && showFloatAction) {
                 // Reboot button for modules flashing
                 ExtendedFloatingActionButton(
                     onClick = {
                         scope.launch {
                             withContext(Dispatchers.IO) {
-                                reboot()
+                                reboot(if (softRebootAfterModuleFlash) "soft-reboot" else "")
                             }
                         }
                     },
@@ -371,6 +386,49 @@ fun FlashScreen(
     }
 }
 
+data class ModuleMetadata(
+    val id: String,
+    val name: String,
+    val version: String,
+    val author: String,
+    val fileName: String,
+)
+
+fun Uri.getModuleMetadata(context: Context): ModuleMetadata {
+    val fileName = getFileName(context)
+    val properties = mutableMapOf<String, String>()
+
+    try {
+        context.contentResolver.openInputStream(this)?.use { inputStream ->
+            ZipInputStream(BufferedInputStream(inputStream)).use { zip ->
+                var entry = zip.nextEntry
+                while (entry != null) {
+                    if (!entry.isDirectory && entry.name == "module.prop") {
+                        zip.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                            lines.forEach { line ->
+                                val trimmed = line.trim()
+                                if (trimmed.isEmpty() || trimmed.startsWith("#") || !trimmed.contains("=")) return@forEach
+                                val (key, value) = trimmed.split("=", limit = 2)
+                                properties[key.trim()] = value.trim()
+                            }
+                        }
+                        break
+                    }
+                    entry = zip.nextEntry
+                }
+            }
+        }
+    } catch (ignored: Exception) {
+    }
+
+    val id = properties["id"].takeUnless { it.isNullOrBlank() } ?: "unknown"
+    val name = properties["name"].takeUnless { it.isNullOrBlank() } ?: "unknown"
+    val version = properties["version"].takeUnless { it.isNullOrBlank() } ?: "unknown"
+    val author = properties["author"].takeUnless { it.isNullOrBlank() } ?: "unknown"
+
+    return ModuleMetadata(id = id, name = name, version = version, author = author, fileName = fileName)
+}
+
 fun Uri.getFileName(context: Context): String {
     val contentResolver = context.contentResolver
     val cursor = contentResolver.query(this, null, null, null, null)
@@ -386,8 +444,13 @@ fun Uri.getFileName(context: Context): String {
 
 @Parcelize
 sealed class FlashIt : Parcelable {
-    data class FlashBoot(val boot: Uri? = null, val lkm: LkmSelection, val ota: Boolean, val allowShell: Boolean = false, val enableAdb: Boolean = false) :
-        FlashIt()
+    data class FlashBoot(
+        val boot: Uri? = null,
+        val lkm: LkmSelection,
+        val ota: Boolean,
+        val allowShell: Boolean = false,
+        val enableAdb: Boolean = false
+    ) : FlashIt()
 
     data class FlashModules(val uris: List<Uri>) : FlashIt()
 
@@ -403,6 +466,16 @@ fun flashIt(
     onStdout: (String) -> Unit,
     onStderr: (String) -> Unit
 ): FlashResult {
+    if (Natives.isLateLoadMode && (
+            flashIt is FlashIt.FlashAnyKernel ||
+                flashIt is FlashIt.FlashUninstall ||
+                flashIt is FlashIt.FlashRestore ||
+                flashIt is FlashIt.FlashBoot && (flashIt.boot == null || flashIt.ota)
+            )
+    ) {
+        return FlashResult(1, "", false)
+    }
+
     return when (flashIt) {
         is FlashIt.FlashBoot -> installBoot(
             flashIt.boot,
@@ -470,7 +543,7 @@ private fun TopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Save,
-                    contentDescription = "Localized description"
+                    contentDescription = null
                 )
             }
         },

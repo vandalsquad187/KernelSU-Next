@@ -4,6 +4,7 @@ kernelsu-objs := core/init.o
 kernelsu-objs += kernel_compat.o
 
 kernelsu-objs += feature/kernel_umount.o
+kernelsu-objs += feature/module_blacklist.o
 kernelsu-objs += feature/sulog.o
 kernelsu-objs += feature/sucompat.o
 
@@ -26,6 +27,9 @@ endif
 else ifeq ($(CONFIG_X86_64),y)
 kernelsu-objs += hook/x86_64/patch_memory.o
 kernelsu-objs += hook/x86_64/syscall_hook.o
+else ifeq ($(CONFIG_RISCV),y)
+kernelsu-objs += hook/riscv64/patch_memory.o
+kernelsu-objs += hook/riscv64/syscall_hook.o
 endif
 # extras.o removed: extras.c deleted upstream (avc spoof replaced by selinux_hide), stale ref breaks 4.14 build (No rule extras.o)
 
@@ -62,6 +66,7 @@ kernelsu-objs += supercall/supercall.o
 kernelsu-objs += feature/adb_root.o
 
 kernelsu-objs += feature/selinux_hide.o
+kernelsu-objs += feature/shell_su_adb_only.o
 
 ifdef KBUILD_EXTMOD
 ifeq ($(CONFIG_KSU_DISABLE_MANAGER),y)
@@ -73,18 +78,63 @@ endif
 ifeq ($(CONFIG_KSU_DEBUG),y)
 ccflags-y += -DCONFIG_KSU_DEBUG=1
 endif
+ifeq ($(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER),y)
+ccflags-y += -DCONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER=1
+endif
 endif
 
 ccflags-y += -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
 ccflags-y += -I$(objtree)/security/selinux -include $(srctree)/include/uapi/asm-generic/errno.h
 
-ifeq ($(filter /%,$(src)),)
+ifneq ($(KBUILD_EXTMOD),)
+# 6.18 exports the external module source as srcroot when M/MO are used.
+ifneq ($(srcroot),)
+KSU_KERNEL_DIR := $(srcroot)
+else
+KSU_KERNEL_DIR := $(KBUILD_EXTMOD)
+endif
+else ifeq ($(filter /%,$(src)),)
 KSU_KERNEL_DIR := $(srctree)/$(src)
 else
 KSU_KERNEL_DIR := $(src)
 endif
 
 ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include
+
+# preinit runner: a static nolibc binary embedded into kernelsu, see preinit/.
+# It is built against the installed UAPI headers of the target kernel
+# (CONFIG_HEADERS_INSTALL, enabled by gki_defconfig).
+KSU_UAPI_INC := $(objtree)/usr/include
+ifneq ($(wildcard $(KSU_UAPI_INC)/linux/unistd.h),)
+kernelsu-objs += preinit/preinit.o
+kernelsu-objs += preinit/blob.o
+
+KSU_RUNNER_CFLAGS := $(CLANG_FLAGS) -std=gnu11 -Os -Wall \
+	-nostdinc -isystem $(shell $(CC) -print-file-name=include) \
+	-I$(KSU_KERNEL_DIR)/preinit/runner/nolibc -I$(KSU_UAPI_INC) \
+	-I$(KSU_KERNEL_DIR)/include \
+	-ffreestanding -fno-stack-protector -fno-pic -fno-pie \
+	-fno-asynchronous-unwind-tables -fno-unwind-tables \
+	-ffunction-sections -fdata-sections
+
+quiet_cmd_ksu_runner = RUNNER  $@
+      cmd_ksu_runner = $(CC) $(KSU_RUNNER_CFLAGS) -c -o $@.o $< && \
+		$(LD) -static -nostdlib -e _start --gc-sections -s -o $@ $@.o && \
+		rm -f $@.o
+
+$(obj)/preinit/runner.elf: $(KSU_KERNEL_DIR)/preinit/runner/runner.c \
+		$(wildcard $(KSU_KERNEL_DIR)/preinit/runner/nolibc/*.h \
+			   $(KSU_KERNEL_DIR)/preinit/runner/nolibc/sys/*.h \
+			   $(KSU_KERNEL_DIR)/include/uapi/*.h) FORCE
+	$(call if_changed,ksu_runner)
+
+targets += preinit/runner.elf
+$(obj)/preinit/blob.o: $(obj)/preinit/runner.elf
+asflags-y += -DKSU_PREINIT_RUNNER_BIN=\"$(obj)/preinit/runner.elf\"
+else
+$(warning -- KernelSU: $(KSU_UAPI_INC) not found, preinit disabled)
+ccflags-y += -DKSU_NO_PREINIT
+endif
 
 obj-$(CONFIG_KSU) += kernelsu.o
 
@@ -161,7 +211,7 @@ ccflags-y += -DKSU_NEW_DCACHE_FLUSH=$(KSU_NEW_DCACHE_FLUSH)
 # (4.14 has struct selinux_state with .ss/.avc members, 2-arg avc/status APIs)
 ccflags-y += -DKSU_COMPAT_HAS_SELINUX_STATE
 
-ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes
+ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes -Wno-missing-declarations
 ccflags-y += -Wno-declaration-after-statement -Wno-unused-function -Wno-unused-variable
 
 # Keep a new line here!! Because someone may append config

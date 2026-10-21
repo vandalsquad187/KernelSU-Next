@@ -5,6 +5,7 @@
 #include <linux/printk.h>
 
 #include "policy/allowlist.h"
+#include "policy/feature.h"
 #include "klog.h" // IWYU pragma: keep
 #include "runtime/ksud_boot.h"
 #include "runtime/ksud.h"
@@ -35,7 +36,6 @@ void on_post_fs_data(void)
     // Sanity check for safe mode only needs early-boot input samples.
     ksu_stop_input_hook_runtime();
     ksu_selinux_hide_handle_post_fs_data();
-
     /* Early Manager UID detection + FD propagation.
      * At post-fs-data, /data is mounted and packages.list is available.
      * By calling track_throne_now() here, we identify the Manager UID
@@ -49,6 +49,9 @@ void on_post_fs_data(void)
         pr_info("on_post_fs_data: manager detected early, appid=%d\n",
                 ksu_get_manager_appid());
     ksu_start_fd_propagator();
+
+    // retry forced features which failed at second stage
+    ksu_feature_apply_forced();
 }
 
 extern void ext4_unregister_sysfs(struct super_block *sb);

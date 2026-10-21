@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import com.rifsxd.ksunext.ui.LocalNavBarEnabled
 import com.rifsxd.ksunext.ui.LocalScrollState
 import com.rifsxd.ksunext.ui.rememberScrollConnection
 import androidx.compose.ui.res.stringResource
@@ -137,15 +138,19 @@ fun SuperUserScreen(navigator: DestinationsNavigator) {
         },
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
     ) { innerPadding ->
+        val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
         PullToRefreshBox(
             modifier = Modifier.padding(innerPadding),
             onRefresh = {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                 scope.launch { viewModel.fetchAppList() }
             },
             isRefreshing = viewModel.isRefreshing
         ) {
             val scrollState = LocalScrollState.current
-            val isNavBarHidden = scrollState?.isScrollingDown?.value ?: false
+            val navBarEnabled = LocalNavBarEnabled.current
+            val isNavBarHidden = (scrollState?.isScrollingDown?.value ?: false) || (navBarEnabled?.value == false)
             val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + if (isNavBarHidden) 0.dp else 112.dp
 
             LazyColumn(
@@ -170,8 +175,8 @@ fun SuperUserScreen(navigator: DestinationsNavigator) {
                 )
             ) {
                 items(
-                    viewModel.appList.filter { it.packageName != ksuApp.packageName },
-                    key = { it.packageName + it.uid }
+                    viewModel.appList.filter { it.displayIdentifier != ksuApp.packageName },
+                    key = { it.displayIdentifier + it.uid }
                 ) { app ->
                     AppItem(app) {
                         navigator.navigate(AppProfileScreenDestination(app))
@@ -211,7 +216,7 @@ private fun AppItem(
             supportingContent = {
                 Column {
                     Text(
-                        text = app.packageName,
+                        text = app.displayIdentifier,
                         style = MaterialTheme.typography.bodySmall
                     )
 

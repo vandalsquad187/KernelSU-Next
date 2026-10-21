@@ -5,15 +5,13 @@
 #include <linux/preempt.h>
 #include <linux/printk.h>
 #include <linux/mm.h>
-#include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
 #include <linux/pgtable.h>
-#endif
 #include <linux/uaccess.h>
 #include <asm/current.h>
 #include <linux/cred.h>
 #include <linux/fs.h>
 #include <linux/types.h>
+#include <linux/version.h>
 #include <linux/sched/task_stack.h>
 #include <linux/ptrace.h>
 
@@ -28,10 +26,6 @@
 #include "supercall/supercall.h"
 #include "sulog/event.h"
 #include "ksu.h"
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
-#define strncpy_from_user_nofault strncpy_from_user
-#endif
-
 #include "util.h"
 
 #define SU_PATH "/system/bin/su"
@@ -59,15 +53,6 @@ static const struct ksu_feature_handler su_compat_handler = {
 	.get_handler = su_compat_feature_get,
 	.set_handler = su_compat_feature_set,
 };
-
-static void __user *userspace_stack_buffer(const void *d, size_t len)
-{
-	// To avoid having to mmap a page in userspace, just write below the stack
-	// pointer.
-	char __user *p = (void __user *)current_user_stack_pointer() - len;
-
-	return copy_to_user(p, d, len) ? NULL : p;
-}
 
 static char __user *ksud_user_path(void)
 {
@@ -175,11 +160,12 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
 	char path[sizeof(su_path) + 1];
 	long ret, orig_regs[5];
 	unsigned long addr;
+	int su_fd = -1;
 	int tmp_fd;
 	struct file *ksud_file;
 	const struct cred *old_cred;
 
-	if (execveat && ((int)PT_REGS_PARM1(regs) != AT_FDCWD || (int)PT_REGS_PARM5(regs) != 0))
+	if (execveat && ((int)PT_REGS_SYSCALL_PARM1(regs) != AT_FDCWD || (int)PT_REGS_PARM5(regs) != 0))
 		goto do_orig_execve;
 
 	if (unlikely(!filename_user))
@@ -224,7 +210,7 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
 	pending_sucompat = ksu_sulog_capture_sucompat(*filename_user, argv_user, GFP_KERNEL);
 	// execve(file, argv, environ)
 	// execveat(fd, file, argv, environ, flags)
-	orig_regs[0] = regs->__PT_PARM1_REG;
+	orig_regs[0] = PT_REGS_SYSCALL_PARM1(regs);
 	orig_regs[1] = regs->__PT_PARM2_REG;
 	orig_regs[2] = regs->__PT_PARM3_REG;
 	orig_regs[3] = regs->__PT_SYSCALL_PARM4_REG;
@@ -233,7 +219,7 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
 	regs->__PT_SYSCALL_PARM4_REG = envp;
 	regs->__PT_PARM3_REG = (unsigned long)argv_user;
 	regs->__PT_PARM2_REG = empty_user_path();
-	regs->__PT_PARM1_REG = tmp_fd;
+	PT_REGS_SYSCALL_PARM1(regs) = tmp_fd;
 
 	ret = escape_with_root_profile();
 	if (ret) {
@@ -244,11 +230,18 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
 	ret = ksu_syscall_table[__NR_execveat](regs);
 	if (ret < 0) {
 		ksu_close_fd(tmp_fd);
-		regs->__PT_PARM1_REG = orig_regs[0];
+		PT_REGS_SYSCALL_PARM1(regs) = orig_regs[0];
 		regs->__PT_PARM2_REG = orig_regs[1];
 		regs->__PT_PARM3_REG = orig_regs[2];
 		regs->__PT_SYSCALL_PARM4_REG = orig_regs[3];
 		regs->__PT_PARM5_REG = orig_regs[4];
+	} else {
+		// Only grant the scoped driver capability after the selected root
+		// profile has been applied successfully.
+		su_fd = ksu_install_su_fd();
+		if (su_fd < 0) {
+			pr_warn("install su session fd failed: %d\n", su_fd);
+		}
 	}
 	return ret;
 
@@ -280,67 +273,3 @@ void __exit ksu_sucompat_exit()
 {
 	ksu_unregister_feature_handler(KSU_FEATURE_SU_COMPAT);
 }
-
-/*
- * Legacy ABI compatibility wrappers for 4.14 syscall table hook path.
- * On kernels < 4.19, syscall_table_hook_arm64.c passes individual
- * arguments (not pt_regs) and calls sys_execve/faccessat/newfstatat
- * directly after our hook returns. We only need to detect /system/bin/su
- * and redirect *filename_user to ksud or sh.
- */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)
-
-static __always_inline int sucompat_redirect_filename(
-	const char __user **filename_user, const char *tag, bool escalate)
-{
-	char path[sizeof(su_path) + 1];
-	long ret;
-
-	if (!ksu_is_allow_uid_for_current(current_uid().val))
-		return 0;
-
-	if (unlikely(!filename_user || !*filename_user))
-		return 0;
-
-	ret = strncpy_from_user(path, *filename_user, sizeof(path));
-	if (ret < 0)
-		return 0;
-
-	if (memcmp(path, su_path, sizeof(su_path)))
-		return 0;
-
-	ksu_compat_sulog(escalate ? 'x' : 'a');
-	pr_info("%s: su found\n", tag);
-
-	if (escalate && !escape_with_root_profile()) {
-		struct path kpath;
-		if (!kern_path(KSUD_PATH, 0, &kpath)) {
-			path_put(&kpath);
-			pr_info("%s: su->ksud!\n", tag);
-			*filename_user = ksud_user_path();
-			return 0;
-		}
-	}
-
-	pr_info("%s: su->sh!\n", tag);
-	*filename_user = userspace_stack_buffer("/system/bin/sh", 14);
-	return 0;
-}
-
-int ksu_handle_execve(const char __user **filename_user, void *argv, void *envp)
-{
-	return sucompat_redirect_filename(filename_user, "sys_execve", true);
-}
-
-int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
-			 int *mode, int *__unused_flags)
-{
-	return sucompat_redirect_filename(filename_user, "faccessat", false);
-}
-
-int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
-{
-	return sucompat_redirect_filename(filename_user, "newfstatat", false);
-}
-
-#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0) */

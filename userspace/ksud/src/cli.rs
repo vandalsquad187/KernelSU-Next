@@ -6,8 +6,12 @@ use android_logger::Config;
 use log::{LevelFilter, info};
 
 use crate::boot_patch::{BootPatchArgs, BootRestoreArgs};
-use crate::module::regenerate_preinit_rc;
-use crate::{apk_sign, assets, debug, defs, ksu_uapi, init_event, ksucalls, module, module_config, sulog, susfsd, utils};
+use crate::lkm_image::BootPatchV2Args;
+use crate::module::regenerate_preinit;
+use crate::{
+    apk_sign, assets, debug, defs, init_event, ksu_uapi, ksucalls, module, module_config, sulog,
+    susfsd, utils, risk,
+};
 
 /// KernelSU Next userspace cli
 #[derive(Parser, Debug)]
@@ -100,6 +104,11 @@ enum Commands {
 
     /// Restore boot or init_boot images patched by KernelSU
     BootRestore(BootRestoreArgs),
+
+    /// Patch KernelSU into a boot image
+    ///
+    /// Always operates on a boot image; never selects init_boot or vendor_boot.
+    BootPatchV2(BootPatchV2Args),
 
     /// Show boot information
     BootInfo {
@@ -308,6 +317,12 @@ enum Module {
     /// list all modules
     List,
 
+    /// preinit actions run before SELinux policy is loaded
+    Preinit {
+        #[command(subcommand)]
+        command: PreinitCmd,
+    },
+
     /// manage module configuration
     Config {
         /// target internal module name (resolved as internal.<name>)
@@ -316,6 +331,32 @@ enum Module {
         #[command(subcommand)]
         command: ModuleConfigCmd,
     },
+
+    /// manage module install-time risk detection
+    Risk {
+        #[command(subcommand)]
+        command: RiskCmd,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum PreinitCmd {
+    /// show per-module preinit state for the next boot
+    Status,
+    /// re-enable preinit after it was disabled by repeated failed boots
+    Reset,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum RiskCmd {
+    /// enable risk detection
+    Enable,
+
+    /// disable risk detection
+    Disable,
+
+    /// show risk detection status
+    Status,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -362,6 +403,21 @@ enum ModuleConfigCmd {
 
 #[derive(clap::Subcommand, Debug)]
 enum Profile {
+    /// print the app profile of <package-name> as JSON
+    Get {
+        /// package name, or "$" for the default non-root profile
+        package: String,
+        /// address this uid instead of the one the package currently has
+        #[arg(long)]
+        uid: Option<i32>,
+    },
+
+    /// set an app profile from the JSON that `get` prints
+    Set {
+        /// file to read, or "-" for stdin
+        file: Option<String>,
+    },
+
     /// get root profile's selinux policy of <package-name>
     GetSepolicy {
         /// package name
@@ -404,7 +460,7 @@ enum Profile {
 enum Feature {
     /// Get feature value and support status
     Get {
-        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide)
+        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide, shell_su_adb_only)
         id: String,
         /// Read from config file
         #[arg(long, default_value_t = false)]
@@ -422,9 +478,9 @@ enum Feature {
     /// List all available features
     List,
 
-    /// Check feature status (supported/unsupported/managed)
+    /// Check feature status (supported/unsupported/managed/forced)
     Check {
-        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide)
+        /// Feature ID or name (su_compat, kernel_umount, sulog, adb_root, selinux_hide, shell_su_adb_only)
         id: String,
     },
 
@@ -472,6 +528,19 @@ enum UmountOp {
 
 #[derive(clap::Subcommand, Debug)]
 enum SusfsAction {
+    /// Load the embedded SUSFS guard LKM for the detected or specified KMI
+    Load {
+        /// Specify kernel KMI version instead of auto-detection
+        #[arg(long)]
+        kmi: Option<String>,
+    },
+    /// Unload the SUSFS guard LKM
+    Unload,
+    /// Configure automatic SUSFS LKM loading during post-fs-data
+    Autoload {
+        #[command(subcommand)]
+        command: SusfsAutoloadAction,
+    },
     /// Show if susfs is supported
     Support,
     /// Show susfs version
@@ -483,8 +552,22 @@ enum SusfsAction {
 }
 
 #[derive(clap::Subcommand, Debug)]
+enum SusfsAutoloadAction {
+    /// Enable auto-load and save a KMI fallback
+    Enable {
+        /// KMI to use if boot-time KMI detection fails
+        #[arg(long)]
+        kmi: Option<String>,
+    },
+    /// Disable automatic SUSFS LKM loading
+    Disable,
+    /// Show whether automatic loading is enabled
+    Status,
+}
+
+#[derive(clap::Subcommand, Debug)]
 enum Initrc {
-    /// Regenerate preinit rc file
+    /// Regenerate preinit rc file and preinit dirs
     Refresh,
 }
 
@@ -495,9 +578,11 @@ pub fn run() -> Result<()> {
             .with_tag("KernelSU Next"),
     );
 
+    ksucalls::setup_sigsys_handler();
+
     // the kernel executes su with argv[0] = "su" and replace it with us
     let arg0 = std::env::args().next().unwrap_or_default();
-    if arg0 == "su" || arg0 == "/system/bin/su" {
+    if arg0 == "su" || arg0.ends_with("/su") {
         return crate::su::root_shell();
     }
 
@@ -511,7 +596,7 @@ pub fn run() -> Result<()> {
     log::info!("command: {:?}", cli.command);
 
     let result = match cli.command {
-        Commands::PostFsData => init_event::on_post_data_fs(),
+        Commands::PostFsData => init_event::on_post_fs_data(),
         Commands::BootCompleted => {
             init_event::on_boot_completed();
             Ok(())
@@ -528,6 +613,18 @@ pub fn run() -> Result<()> {
                 Module::Action { id } => module::run_action(&id),
                 Module::Metamodule => module::is_metamodule_installed(),
                 Module::List => module::list_modules(),
+                Module::Preinit { command } => match command {
+                    PreinitCmd::Status => {
+                        crate::preinit::print_status();
+                        Ok(())
+                    }
+                    PreinitCmd::Reset => crate::preinit::reset_bootcount(),
+                },
+                Module::Risk { command } => match command {
+                    RiskCmd::Enable => risk::set_risk_detection_enabled(true),
+                    RiskCmd::Disable => risk::set_risk_detection_enabled(false),
+                    RiskCmd::Status => risk::risk_detection_status(),
+                },
                 Module::Config { internal, command } => {
                     let module_id = match internal {
                         Some(internal_name) => format!("internal.{internal_name}"),
@@ -628,7 +725,11 @@ pub fn run() -> Result<()> {
             Sepolicy::Apply { file } => crate::sepolicy::apply_file(file),
             Sepolicy::Check { sepolicy } => crate::sepolicy::check_rule(&sepolicy),
         },
-        Commands::LateLoad { package_name, kmi, allow_shell } => crate::late_load::run(&package_name, kmi, allow_shell),
+        Commands::LateLoad {
+            package_name,
+            kmi,
+            allow_shell,
+        } => crate::late_load::run(&package_name, kmi, allow_shell),
         Commands::Services => {
             if ksucalls::get_version() <= 0 {
                 info!("KernelSU Next not available, exiting services");
@@ -639,6 +740,8 @@ pub fn run() -> Result<()> {
         }
         Commands::Sulogd => sulog::run_sulogd(),
         Commands::Profile { command } => match command {
+            Profile::Get { package, uid } => crate::profile::get_profile(&package, uid),
+            Profile::Set { file } => crate::profile::set_profile(file.as_deref()),
             Profile::GetSepolicy { package } => crate::profile::get_sepolicy(package),
             Profile::SetSepolicy { package, policy } => {
                 crate::profile::set_sepolicy(package, policy)
@@ -698,6 +801,10 @@ pub fn run() -> Result<()> {
                 println!("uapi_version: {}", info.uapi_version);
                 println!("features: 0x{:x}", info.features);
                 println!("lkm: {}", ksucalls::is_lkm());
+                println!(
+                    "bundled: {}",
+                    (info.flags & ksu_uapi::KSU_GET_INFO_FLAG_BUNDLED) != 0
+                );
                 println!("late_load: {}", ksucalls::is_late_load());
                 println!("runtime_mode: {}", ksucalls::runtime_mode());
                 println!(
@@ -751,16 +858,29 @@ pub fn run() -> Result<()> {
             }
         },
         Commands::BootRestore(boot_restore) => crate::boot_patch::restore(boot_restore),
+        Commands::BootPatchV2(patch) => crate::lkm_image::patch_boot(&patch),
         Commands::Resetprop { args } => {
             let mut full_args = vec!["resetprop".to_string()];
             full_args.extend(args);
             crate::resetprop::resetprop_main(&full_args)
         }
-        Commands::SoftReboot => init_event::soft_reboot(),
+        Commands::SoftReboot => crate::soft_reboot::soft_reboot(),
 
         Commands::Insmod { module, params } => debug::insmod(&module, &params),
 
         Commands::Susfs { command } => match command {
+            SusfsAction::Load { kmi } => crate::susfsd::load(kmi.as_deref()),
+            SusfsAction::Unload => crate::susfsd::unload(),
+            SusfsAction::Autoload { command } => match command {
+                SusfsAutoloadAction::Enable { kmi } => {
+                    susfsd::set_autoload(true, kmi.as_deref())
+                }
+                SusfsAutoloadAction::Disable => susfsd::set_autoload(false, None),
+                SusfsAutoloadAction::Status => {
+                    println!("{}", if susfsd::autoload_enabled()? { "enabled" } else { "disabled" });
+                    Ok(())
+                }
+            },
             SusfsAction::Support => susfsd::show_features(true),
             SusfsAction::Version => susfsd::show_version(),
             SusfsAction::Variant => susfsd::show_variant(),
@@ -772,7 +892,7 @@ pub fn run() -> Result<()> {
             Kernel::Umount { command } => match command {
                 UmountOp::Add { mnt, flags } => ksucalls::umount_list_add(&mnt, flags),
                 UmountOp::Del { mnt } => ksucalls::umount_list_del(&mnt),
-                UmountOp::Wipe => ksucalls::umount_list_wipe().map_err(Into::into),
+                UmountOp::Wipe => ksucalls::umount_list_wipe(),
             },
             Kernel::NotifyModuleMounted => {
                 ksucalls::report_module_mounted();
@@ -780,7 +900,7 @@ pub fn run() -> Result<()> {
             }
         },
         Commands::Initrc { command } => match command {
-            Initrc::Refresh => regenerate_preinit_rc(),
+            Initrc::Refresh => regenerate_preinit(),
         },
     };
 

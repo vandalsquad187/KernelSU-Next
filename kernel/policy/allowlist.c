@@ -27,6 +27,8 @@
 #include "policy/app_profile.h"
 #include "manager/manager_identity.h"
 #include "infra/su_mount_ns.h"
+#include "feature/shell_su_adb_only.h"
+
 // 4.14 compat: escape_to_root_forced removed upstream, fallthrough/TWA_* only 5.x+
 #ifndef escape_to_root_forced
 #define escape_to_root_forced() escape_with_root_profile()
@@ -293,7 +295,7 @@ bool __ksu_is_allow_uid(uid_t uid)
 	return false;
 }
 
-bool __ksu_is_allow_uid_for_current(uid_t uid)
+bool ksu_is_uid_granted_root(uid_t uid)
 {
 	if (unlikely(uid == 0)) {
 		// already root, but only allow our domain.
@@ -302,18 +304,42 @@ bool __ksu_is_allow_uid_for_current(uid_t uid)
 	return __ksu_is_allow_uid(uid);
 }
 
+bool __ksu_is_allow_uid_for_current(uid_t uid)
+{
+    if (unlikely(uid == SHELL_UID) && !ksu_shell_su_allowed_for_current()) {
+        return false;
+    }
+    return ksu_is_uid_granted_root(uid);
+}
+
 bool ksu_uid_should_umount(uid_t uid)
 {
-	struct app_profile *profile;
-	bool res;
-	if (likely(ksu_is_manager_appid_valid()) && unlikely(ksu_get_manager_appid() == uid % PER_USER_RANGE)) {
-		// we should not umount on manager!
-		return false;
-	}
-	if (unlikely(uid == WEBVIEW_ZYGOTE_UID)) {
-		// we should not umount for webview zygote
-		return false;
-	}
+    struct app_profile *profile;
+    bool res;
+    if (likely(ksu_is_manager_appid_valid()) && unlikely(ksu_get_manager_appid() == uid % PER_USER_RANGE)) {
+        // we should not umount on manager!
+        return false;
+    }
+#ifdef CONFIG_KSU_DISABLE_POLICY
+    return !__ksu_is_allow_uid(uid);
+#else
+    rcu_read_lock();
+    profile = ksu_get_app_profile(uid);
+    if (!profile) {
+        // no app profile found, it must be non root app
+        res = default_non_root_profile.umount_modules;
+    } else if (profile->allow_su) {
+        // if found and it is granted to su, we shouldn't umount for it
+        res = false;
+    } else {
+        // found an app profile
+        if (profile->nrp_config.use_default) {
+            res = default_non_root_profile.umount_modules;
+        } else {
+            res = profile->nrp_config.profile.umount_modules;
+        }
+    }
+    rcu_read_unlock();
 
 	rcu_read_lock();
 	profile = ksu_get_app_profile(uid);
@@ -615,22 +641,22 @@ void ksu_prune_allowlist(bool (*is_uid_valid)(uid_t, char *, void *),
         return;
     }
 
-	bool modified = false;
-	mutex_lock(&allowlist_mutex);
-	hash_for_each_safe (allow_list, i, tmp, np, list) {
-		uid_t uid = np->profile.curr_uid;
-		char *package = np->profile.key;
-		// we use this uid for special cases, don't prune it!
-		bool is_preserved_uid = uid == KSU_APP_PROFILE_PRESERVE_UID;
-		if (!is_preserved_uid && !is_uid_valid(uid, package, data)) {
-			modified = true;
-			pr_info("prune uid: %d, package: %s\n", uid, package);
-			hlist_del_rcu(&np->list);
-			put_perm_data(np);
-			--allow_list_count;
-		}
-	}
-	mutex_unlock(&allowlist_mutex);
+    bool modified = false;
+    mutex_lock(&allowlist_mutex);
+    hash_for_each_safe (allow_list, i, tmp, np, list) {
+        uid_t uid = np->profile.curr_uid;
+        char *package = np->profile.key;
+        // we use this uid for special cases, don't prune it!
+        bool is_preserved_uid = uid == KSU_APP_PROFILE_PRESERVE_UID || uid == WEBVIEW_ZYGOTE_UID;
+        if (!is_preserved_uid && !is_uid_valid(uid, package, data)) {
+            modified = true;
+            pr_info("prune uid: %d, package: %s\n", uid, package);
+            hlist_del_rcu(&np->list);
+            put_perm_data(np);
+            --allow_list_count;
+        }
+    }
+    mutex_unlock(&allowlist_mutex);
 
     if (modified) {
         smp_mb();
