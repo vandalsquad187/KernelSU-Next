@@ -77,6 +77,7 @@ void seccomp_filter_release(struct task_struct *tsk);
 static bool has_call_to_spin_lock = false;
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 static void disable_seccomp(void)
 {
     struct task_struct *fake;
@@ -122,6 +123,16 @@ static void disable_seccomp(void)
     seccomp_filter_release(fake);
     kfree(fake);
 }
+#else /* < 5.9: no seccomp.filter_count / seccomp_filter_release */
+static void disable_seccomp(void)
+{
+    spin_lock_irq(&current->sighand->siglock);
+    clear_thread_flag(TIF_SECCOMP);
+    current->seccomp.mode = 0;
+    current->seccomp.filter = NULL;
+    spin_unlock_irq(&current->sighand->siglock);
+}
+#endif // 5.9
 
 int escape_with_root_profile(void)
 {
