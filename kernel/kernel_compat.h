@@ -4,6 +4,9 @@
 #include <linux/version.h>
 #include <linux/compat.h>
 #include <linux/fs.h>
+#include <linux/cred.h>
+#include <linux/key.h>
+#include <linux/slab.h>
 #include <linux/uaccess.h>
 
 #if defined(CONFIG_KEYS) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
@@ -291,7 +294,7 @@ __weak char *bin2hex(char *dst, const void *src, size_t count)
 #define selinux_cred(cred) ((cred)->security)
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION (4, 15, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
 __weak void groups_sort(struct group_info *group_info) { } // no-op
 #endif
 
