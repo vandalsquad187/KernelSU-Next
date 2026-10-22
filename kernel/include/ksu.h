@@ -22,6 +22,8 @@ extern bool ksu_late_loaded;
 #define KSU_CROWN_DIAG_PKG_LIST_OK (1U << 8)
 extern uint32_t ksu_crown_diag;
 extern int ksu_throne_diag_errno;
+extern uint32_t ksu_patch_diag_ok;
+extern uint32_t ksu_patch_diag_fail;
 extern bool allow_shell;
 #ifdef MODULE
 extern bool ksu_bundled;

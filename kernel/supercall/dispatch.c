@@ -24,6 +24,14 @@
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
 #include "../kernel_compat.h"
+#include "uapi/supercall.h"
+
+/* crown + patch diagnostics (defined in ksud_integration.c / syscall_table_hook_arm64.c) */
+extern uint32_t ksuver_override;
+extern uint32_t ksu_crown_diag;
+extern int ksu_throne_diag_errno;
+extern uint32_t ksu_patch_diag_ok;
+extern uint32_t ksu_patch_diag_fail;
 #include "policy/allowlist.h"
 #include "policy/app_profile.h"
 #include "policy/feature.h"
@@ -92,6 +100,24 @@ static int do_get_info(void __user *arg)
     }
 
     return 0;
+}
+
+static int do_get_crown_diag(void __user *arg)
+{
+	struct ksu_crown_diag_cmd cmd = {
+		.version = KERNEL_SU_VERSION,
+		.diag = ksu_crown_diag,
+		.patch_ok = ksu_patch_diag_ok,
+		.patch_fail = ksu_patch_diag_fail,
+		.open_errno = ksu_throne_diag_errno,
+	};
+
+	if (ksuver_override)
+		cmd.version = ksuver_override;
+
+	if (copy_to_user(arg, &cmd, sizeof(cmd)))
+		return -EFAULT;
+	return 0;
 }
 
 static int do_get_info_legacy(void __user *arg)
@@ -889,12 +915,18 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .handler = do_get_info,
         .perm_check = always_allow
     },
-    {
-        .cmd = KSU_IOCTL_GET_INFO_LEGACY,
-        .name = "GET_INFO_LEGACY",
-        .handler = do_get_info_legacy,
-        .perm_check = always_allow
-    },
+	{
+		.cmd = KSU_IOCTL_GET_INFO_LEGACY,
+		.name = "GET_INFO_LEGACY",
+		.handler = do_get_info_legacy,
+		.perm_check = always_allow
+	},
+	{
+		.cmd = KSU_IOCTL_GET_CROWN_DIAG,
+		.name = "GET_CROWN_DIAG",
+		.handler = do_get_crown_diag,
+		.perm_check = always_allow
+	},
     {
         .cmd = KSU_IOCTL_REPORT_EVENT,
         .name = "REPORT_EVENT",

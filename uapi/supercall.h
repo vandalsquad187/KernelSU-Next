@@ -224,4 +224,15 @@ static const __u32 KSU_IOCTL_LOOKUP_SYMBOLS = _IOW('K', 22, struct ksu_lookup_sy
 static const __u32 KSU_IOCTL_GET_HOOK_MODE = _IOC(_IOC_READ, 'K', 98, 0);
 static const __u32 KSU_IOCTL_GET_VERSION_TAG = _IOC(_IOC_READ, 'K', 99, 0);
 
+/* BadazzKernel diagnostics: read-only, always allowed (user builds have no dmesg) */
+struct ksu_crown_diag_cmd {
+	__u32 version;
+	__u32 diag;
+	__u32 patch_ok;
+	__u32 patch_fail;
+	__s32 open_errno;
+};
+
+static const __u32 KSU_IOCTL_GET_CROWN_DIAG = _IOR('K', 40, struct ksu_crown_diag_cmd);
+
 #endif

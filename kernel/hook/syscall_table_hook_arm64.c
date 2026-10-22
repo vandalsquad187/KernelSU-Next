@@ -324,13 +324,20 @@ static noinline long hook_armeabi_prctl(int option, unsigned long arg2,
 // for 4.19+ old_ptr is actually syscall_fn_t *, which is just long * so we can consider this void **
 // for 4.19- old_ptr is actually void **
 // target_table is void *target_table[];
-static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, void *new_ptr, void *target_table)
+
+/* patch diagnostics readable via KSU_IOCTL_GET_CROWN_DIAG (no dmesg on user builds) */
+uint32_t ksu_patch_diag_ok = 0;
+uint32_t ksu_patch_diag_fail = 0;
+
+static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, void *new_ptr, void *target_table, unsigned long diag_bit)
 {
 	void **sctable = (void **)target_table;
 	void **syscall_slot_addr = &sctable[syscall_nr];
 
-	if (!*syscall_slot_addr)
+	if (!*syscall_slot_addr) {
+		ksu_patch_diag_fail |= (1UL << diag_bit);
 		return;
+	}
 
 	pr_info("%s: hooking syscall #%d at 0x%lx\n", __func__, syscall_nr, (long)syscall_slot_addr);
 
@@ -354,6 +361,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	// BUG_ON(offset + len > PAGE_SIZE);
 	if (offset + sizeof(void *) > PAGE_SIZE) {
 		pr_info("%s: syscall slot crosses page boundary! aborting.\n", __func__);
+		ksu_patch_diag_fail |= (1UL << diag_bit);
 		return;
 	}
 
@@ -367,6 +375,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	void *orig = NULL, *verify = NULL;
 	if (copy_from_kernel_nofault(&orig, syscall_slot_addr, sizeof(void *)) || !orig) {
 		pr_err("%s: syscall #%d snapshot read failed, aborting patch\n", __func__, syscall_nr);
+		ksu_patch_diag_fail |= (1UL << diag_bit);
 		return;
 	}
 
@@ -402,6 +411,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 			verify = NULL;
 			if (!copy_from_kernel_nofault(&verify, syscall_slot_addr, sizeof(void *))) {
 				if (verify == new_ptr) {
+					ksu_patch_diag_ok |= (1UL << diag_bit);
 					return;
 				}
 			}
@@ -422,6 +432,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 		}
 		pr_err("%s: syscall #%d patch verify FAILED (slot 0x%lx reads 0x%lx, expected 0x%lx)\n",
 		       __func__, syscall_nr, (long)syscall_slot_addr, (long)verify, (long)new_ptr);
+		ksu_patch_diag_fail |= (1UL << diag_bit);
 	}
 
 	smp_mb();
@@ -535,14 +546,14 @@ static void syscall_table_sucompat_enable()
 {
 	mutex_lock(&sucompat_toggle_mutex);
 
-	read_and_replace_syscall((void *)&aarch64_execve, __AARCH64_execve, (void *)hook_aarch64_execve, (void *)sys_call_table);
-	read_and_replace_syscall((void *)&aarch64_faccessat, __AARCH64_faccessat, (void *)hook_aarch64_faccessat, (void *)sys_call_table);
-	read_and_replace_syscall((void *)&aarch64_newfstatat, __AARCH64_newfstatat, (void *)hook_aarch64_newfstatat, (void *)sys_call_table);
+	read_and_replace_syscall((void *)&aarch64_execve, __AARCH64_execve, (void *)hook_aarch64_execve, (void *)sys_call_table, 1);
+	read_and_replace_syscall((void *)&aarch64_faccessat, __AARCH64_faccessat, (void *)hook_aarch64_faccessat, (void *)sys_call_table, 2);
+	read_and_replace_syscall((void *)&aarch64_newfstatat, __AARCH64_newfstatat, (void *)hook_aarch64_newfstatat, (void *)sys_call_table, 3);
 
 #if defined(CONFIG_COMPAT)
-	read_and_replace_syscall((void *)&armeabi_execve, __ARMEABI_execve, (void *)hook_armeabi_execve, (void *)compat_sys_call_table);
-	read_and_replace_syscall((void *)&armeabi_faccessat, __ARMEABI_faccessat, (void *)hook_armeabi_faccessat, (void *)compat_sys_call_table);
-	read_and_replace_syscall((void *)&armeabi_fstatat64, __ARMEABI_fstatat64, (void *)hook_armeabi_fstatat64, (void *)compat_sys_call_table);
+	read_and_replace_syscall((void *)&armeabi_execve, __ARMEABI_execve, (void *)hook_armeabi_execve, (void *)compat_sys_call_table, 9);
+	read_and_replace_syscall((void *)&armeabi_faccessat, __ARMEABI_faccessat, (void *)hook_armeabi_faccessat, (void *)compat_sys_call_table, 10);
+	read_and_replace_syscall((void *)&armeabi_fstatat64, __ARMEABI_fstatat64, (void *)hook_armeabi_fstatat64, (void *)compat_sys_call_table, 11);
 #endif
 
 	mutex_unlock(&sucompat_toggle_mutex);
@@ -570,24 +581,24 @@ static __init int ksu_syscall_table_hook_init()
 	// enable on init!
 	syscall_table_sucompat_enable();
 
-	read_and_replace_syscall((void *)&aarch64_reboot, __AARCH64_reboot, (void *)hook_aarch64_reboot, (void *)sys_call_table);
+	read_and_replace_syscall((void *)&aarch64_reboot, __AARCH64_reboot, (void *)hook_aarch64_reboot, (void *)sys_call_table, 0);
 
 	// 4.14 legacy: hook sys_prctl for Manager version detection
-	read_and_replace_syscall((void *)&aarch64_prctl, __AARCH64_prctl, (void *)hook_aarch64_prctl, (void *)sys_call_table);
+	read_and_replace_syscall((void *)&aarch64_prctl, __AARCH64_prctl, (void *)hook_aarch64_prctl, (void *)sys_call_table, 6);
 
 	// will be unregged
-	read_and_replace_syscall((void *)&aarch64_newfstat, __AARCH64_newfstat, (void *)hook_aarch64_newfstat_ret, (void *)sys_call_table);
-	read_and_replace_syscall((void *)&aarch64_read, __AARCH64_read, (void *)hook_aarch64_read, (void *)sys_call_table);
+	read_and_replace_syscall((void *)&aarch64_newfstat, __AARCH64_newfstat, (void *)hook_aarch64_newfstat_ret, (void *)sys_call_table, 4);
+	read_and_replace_syscall((void *)&aarch64_read, __AARCH64_read, (void *)hook_aarch64_read, (void *)sys_call_table, 5);
 
 #if defined(CONFIG_COMPAT)
-	read_and_replace_syscall((void *)&armeabi_reboot, __ARMEABI_reboot, (void *)hook_armeabi_reboot, (void *)compat_sys_call_table);
+	read_and_replace_syscall((void *)&armeabi_reboot, __ARMEABI_reboot, (void *)hook_armeabi_reboot, (void *)compat_sys_call_table, 8);
 
 	// 4.14 legacy: hook compat sys_prctl for Manager version detection
-	read_and_replace_syscall((void *)&armeabi_prctl, __ARMEABI_prctl, (void *)hook_armeabi_prctl, (void *)compat_sys_call_table);
+	read_and_replace_syscall((void *)&armeabi_prctl, __ARMEABI_prctl, (void *)hook_armeabi_prctl, (void *)compat_sys_call_table, 14);
 
 	// will be unregged
-	read_and_replace_syscall((void *)&armeabi_fstat64, __ARMEABI_fstat64, (void *)hook_armeabi_fstat64_ret, (void *)compat_sys_call_table);
-	read_and_replace_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)compat_sys_call_table);
+	read_and_replace_syscall((void *)&armeabi_fstat64, __ARMEABI_fstat64, (void *)hook_armeabi_fstat64_ret, (void *)compat_sys_call_table, 12);
+	read_and_replace_syscall((void *)&armeabi_read, __ARMEABI_read, (void *)hook_armeabi_read, (void *)compat_sys_call_table, 13);
 #endif // COMPAT
 
 	return 0;
