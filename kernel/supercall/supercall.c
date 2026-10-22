@@ -191,7 +191,32 @@ extern uint32_t ksu_crown_diag;
 extern int ksu_throne_diag_errno;
 extern uint32_t ksuver_override;
 
-long ksu_get_crown_diag(unsigned long arg3, unsigned long arg4, unsigned long arg5);
+/*
+ * arg2 == 3: crown diagnostics for user builds without dmesg access.
+ * Returns version (arg3) plus the crown milestone bitmask (arg4) and the
+ * packages.list open errno (arg5).
+ */
+long ksu_get_crown_diag(unsigned long arg3, unsigned long arg4, unsigned long arg5)
+{
+	u32 version = KERNEL_SU_VERSION;
+	int __user *u_version = (int __user *)arg3;
+	int __user *u_diag = (int __user *)arg4;
+	int __user *u_errno = (int __user *)arg5;
+
+	if (ksuver_override)
+		version = ksuver_override;
+
+	if (u_version && copy_to_user(u_version, &version, sizeof(version)))
+		return -EFAULT;
+	if (u_diag && copy_to_user(u_diag, &ksu_crown_diag, sizeof(ksu_crown_diag)))
+		return -EFAULT;
+	if (u_errno && copy_to_user(u_errno, &ksu_throne_diag_errno, sizeof(ksu_throne_diag_errno)))
+		return -EFAULT;
+
+	pr_info("prctl: crown diag version=%u diag=0x%x open_errno=%d for pid %d\n",
+		version, ksu_crown_diag, ksu_throne_diag_errno, current->pid);
+	return 0;
+}
 
 /*
  * 4.14 LEGACY: sys_prctl handler for Manager version detection.
