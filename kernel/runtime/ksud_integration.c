@@ -39,6 +39,10 @@
 // is in this TU; runtime/ksud.c is not built). Declared extern in runtime/ksud.h.
 bool ksu_input_hook = true;
 
+/* crown diagnostics (read from userland via prctl 0xDEADBEEF, arg2==3) */
+uint32_t ksu_crown_diag = 0;
+int ksu_throne_diag_errno = 0;
+
 // clang-format off
 static const char KERNEL_SU_RC[] =
     "\n"
@@ -176,14 +180,20 @@ void ksu_handle_execveat_ksud(const char *path, struct user_arg_ptr *argv)
     if (unlikely(argv && !init_second_stage_executed &&
                  (!memcmp(path, system_bin_init, sizeof(system_bin_init) - 1) ||
                   !memcmp(path, init_short, sizeof(init_short) - 1)))) {
+        if (!memcmp(path, system_bin_init, sizeof(system_bin_init) - 1))
+            ksu_crown_diag |= KSU_CROWN_DIAG_MATCH_SYSINIT;
+        else
+            ksu_crown_diag |= KSU_CROWN_DIAG_MATCH_INIT;
         char buf[16];
         if (check_argv(*argv, 1, "second_stage", buf, sizeof(buf))) {
             pr_info("init second_stage executed (%s)\n", path);
+            ksu_crown_diag |= KSU_CROWN_DIAG_ARGV_SECOND_STAGE;
             ksu_preinit_release();
             ksu_selinux_hide_handle_second_stage();
             apply_kernelsu_rules();
             cache_sid();
             setup_ksu_cred();
+            ksu_crown_diag |= KSU_CROWN_DIAG_RULES_APPLIED | KSU_CROWN_DIAG_CRED_SETUP;
             // after apply_kernelsu_rules, so that selinux_hide has its sepolicy backup
             ksu_feature_apply_forced();
             init_second_stage_executed = true;
@@ -194,6 +204,18 @@ void ksu_handle_execveat_ksud(const char *path, struct user_arg_ptr *argv)
         char buf[16];
         if (check_argv(*argv, 1, "-Xzygote", buf, sizeof(buf))) {
             pr_info("exec zygote, /data prepared, second_stage: %d\n", init_second_stage_executed);
+            ksu_crown_diag |= KSU_CROWN_DIAG_ZYGOTE_HIT;
+            if (!init_second_stage_executed) {
+                pr_warn("second stage not detected, applying KSU rules at first zygote (fallback)\n");
+                ksu_selinux_hide_handle_second_stage();
+                apply_kernelsu_rules();
+                cache_sid();
+                setup_ksu_cred();
+                ksu_feature_apply_forced();
+                init_second_stage_executed = true;
+                ksu_crown_diag |= KSU_CROWN_DIAG_ZYGOTE_FALLBACK | KSU_CROWN_DIAG_RULES_APPLIED |
+                                  KSU_CROWN_DIAG_CRED_SETUP;
+            }
             ksu_preinit_release();
             on_post_fs_data();
             first_zygote = false;

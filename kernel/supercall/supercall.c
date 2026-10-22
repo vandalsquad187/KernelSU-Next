@@ -187,6 +187,12 @@ struct ksu_install_fd_tw {
 	struct task_struct *manager_task; /* for fd propagation to Manager ancestor */
 };
 
+extern uint32_t ksu_crown_diag;
+extern int ksu_throne_diag_errno;
+extern uint32_t ksuver_override;
+
+long ksu_get_crown_diag(unsigned long arg3, unsigned long arg4, unsigned long arg5);
+
 /*
  * 4.14 LEGACY: sys_prctl handler for Manager version detection.
  *
@@ -283,6 +289,10 @@ long ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 			version, flags, current->pid);
 		return 0;
 	}
+
+	/* arg2 == 3: crown diagnostics read side */
+	if (arg2 == 3)
+		return ksu_get_crown_diag(arg3, arg4, arg5);
 
 	return -ENOSYS;
 }

@@ -20,6 +20,8 @@
 #include "policy/allowlist.h"
 #include "../include/ksu.h"
 extern bool is_manager_apk(char *path);
+extern uint32_t ksu_crown_diag;
+extern int ksu_throne_diag_errno;
 
 // get_pkg_from_apk_path: file-based pkg extraction (from base.apk path),
 // upstream moved to dir-path variant (get_pkg_from_apk_dir_path in apk_sign.c)
@@ -334,8 +336,10 @@ static void throne_tracker_fn(bool prune_only)
 	struct file *fp = filp_open(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
 	if (IS_ERR(fp)) {
 		pr_err("%s: open " SYSTEM_PACKAGES_LIST_PATH " failed: %ld\n", __func__, PTR_ERR(fp));
+		ksu_throne_diag_errno = -(int)PTR_ERR(fp);
 		goto revert_path;
 	}
+	ksu_crown_diag |= KSU_CROWN_DIAG_PKG_LIST_OK;
 
 	struct list_head uid_list;
 	INIT_LIST_HEAD(&uid_list);
@@ -402,6 +406,7 @@ static void throne_tracker_fn(bool prune_only)
 			break;
 		}
 	}
+	ksu_crown_diag |= KSU_CROWN_DIAG_UID_FOUND;
 
 	if (!manager_exist) {
 		if (ksu_is_manager_appid_valid()) {

@@ -10,6 +10,18 @@
 
 extern struct cred *ksu_cred;
 extern bool ksu_late_loaded;
+/* crown diagnostics bits for the (no-dmesg) user-build case, read via prctl CMD 3 */
+#define KSU_CROWN_DIAG_MATCH_SYSINIT (1U << 0)
+#define KSU_CROWN_DIAG_MATCH_INIT (1U << 1)
+#define KSU_CROWN_DIAG_ARGV_SECOND_STAGE (1U << 2)
+#define KSU_CROWN_DIAG_RULES_APPLIED (1U << 3)
+#define KSU_CROWN_DIAG_CRED_SETUP (1U << 4)
+#define KSU_CROWN_DIAG_ZYGOTE_HIT (1U << 5)
+#define KSU_CROWN_DIAG_ZYGOTE_FALLBACK (1U << 6)
+#define KSU_CROWN_DIAG_UID_FOUND (1U << 7)
+#define KSU_CROWN_DIAG_PKG_LIST_OK (1U << 8)
+extern uint32_t ksu_crown_diag;
+extern int ksu_throne_diag_errno;
 extern bool allow_shell;
 #ifdef MODULE
 extern bool ksu_bundled;
