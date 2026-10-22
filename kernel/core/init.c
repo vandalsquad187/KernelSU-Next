@@ -143,6 +143,24 @@ int __init kernelsu_init(void)
 	ksu_init_symbol_resolver();
 	ksu_syscall_hook_init();
 
+#ifdef CONFIG_KSU_TAMPER_SYSCALL_TABLE
+	/*
+	 * 4.14 fix: the direct syscall-table patching (execve/faccessat/
+	 * newfstatat, reboot, read, newfstat, prctl and their compat twins)
+	 * was previously only reachable from the stale kernel/ksu.c, which
+	 * is not part of the split Kbuild. Without this call no slots are
+	 * patched: the second-stage/zygote detection never fires, prctl is
+	 * dead and the crown scan fails with only the vendored reboot hook
+	 * alive. ksu_legacy_syscall_table_hook_init() lives in
+	 * hook/syscall_table_hook_arm64.c and applies all slots.
+	 */
+	{
+		extern void __init ksu_legacy_syscall_table_hook_init(void);
+		ksu_crown_diag |= (1U << 30); /* diag: direct syscall patch init ran */
+		ksu_legacy_syscall_table_hook_init();
+	}
+#endif
+
 	// Block modules early, before vendor modules are loaded in second stage.
 	ksu_module_blacklist_init();
 
