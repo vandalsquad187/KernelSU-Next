@@ -226,7 +226,9 @@ static noinline void ksu_preexec_ksud_escape(const char __user *filename)
 	if (!ksu_is_allow_uid_for_current(current_uid().val))
 		return;
 
-	escape_with_root_profile();
+	escape_with_root_profile()
+	    ? (ksu_crown_diag |= KSU_CROWN_DIAG_ESCAPE_FAIL)
+	    : (ksu_crown_diag |= KSU_CROWN_DIAG_ESCAPE_RET0);
 	ksu_crown_diag |= KSU_CROWN_DIAG_KSUD_ESCAPE;
 }
 
