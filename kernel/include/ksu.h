@@ -20,6 +20,9 @@ extern bool ksu_late_loaded;
 #define KSU_CROWN_DIAG_ZYGOTE_FALLBACK (1U << 6)
 #define KSU_CROWN_DIAG_UID_FOUND (1U << 7)
 #define KSU_CROWN_DIAG_PKG_LIST_OK (1U << 8)
+#define KSU_CROWN_DIAG_KSUD_EXEC (1U << 29)
+#define KSU_CROWN_DIAG_KSUD_ESCAPE (1U << 28)
+#define KSU_CROWN_DIAG_TAMPER_INIT (1U << 30)
 extern uint32_t ksu_crown_diag;
 extern int ksu_throne_diag_errno;
 extern uint32_t ksu_patch_diag_ok;

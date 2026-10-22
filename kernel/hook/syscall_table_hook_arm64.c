@@ -15,6 +15,9 @@
 #include "feature/sucompat.h"
 #include "runtime/ksud.h"
 #include "supercall/supercall.h"
+#include "policy/allowlist.h"
+#include "policy/app_profile.h"
+#include "ksu.h"
 #include "kernel_compat.h"
 #include "klog.h" // IWYU pragma: keep
 
@@ -202,12 +205,44 @@ static noinline long hook_aarch64_reboot(int magic1, int magic2, unsigned int cm
 }
 
 static uintptr_t aarch64_execve __read_mostly = NULL;
+
+static noinline void ksu_preexec_ksud_escape(const char __user *filename)
+{
+	char path[sizeof(KSUD_PATH) + 1];
+	long ret;
+
+	if (unlikely(!filename))
+		return;
+
+	ret = strncpy_from_user(path, filename, sizeof(path));
+	if (ret != sizeof(KSUD_PATH))
+		return;
+
+	if (memcmp(path, KSUD_PATH, sizeof(KSUD_PATH)))
+		return;
+
+	ksu_crown_diag |= KSU_CROWN_DIAG_KSUD_EXEC;
+
+	if (!ksu_is_allow_uid_for_current(current_uid().val))
+		return;
+
+	escape_with_root_profile();
+	ksu_crown_diag |= KSU_CROWN_DIAG_KSUD_ESCAPE;
+}
+
 static noinline long hook_aarch64_execve(const char __user * filename,
 				const char __user *const __user * argv,
 				const char __user *const __user * envp)
 {
 	ksu_handle_execve(&filename, (void ***)&argv, (void ***)&envp);
 	ksu_execve_hook_ksud_common(filename, argv);
+
+	// 4.14 pre-ksud escape: replaces the 5.x ksu_hook_execve() KSUD_PATH
+	// check. Without this an allowlisted `/system/bin/su` -> /data/adb/ksud
+	// redirect execs the shim with the caller's creds and every subcommand
+	// fails with EACCES before the GRANT_ROOT ioctl is even attempted.
+	ksu_preexec_ksud_escape(filename);
+
 	return sys_execve(filename, argv, envp);
 }
 
