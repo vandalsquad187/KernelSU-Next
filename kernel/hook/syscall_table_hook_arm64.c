@@ -208,18 +208,28 @@ static uintptr_t aarch64_execve __read_mostly = NULL;
 
 static noinline void ksu_preexec_ksud_escape(const char __user *filename)
 {
-	char path[sizeof(KSUD_PATH) + 1];
+	char path[sizeof(KSU_BIN_KSUD_PATH) + 1];
 	long ret;
 
 	if (unlikely(!filename))
 		return;
 
 	ret = strncpy_from_user(path, filename, sizeof(path));
-	if (ret != (long)sizeof(KSUD_PATH) - 1)
+	if (ret < 0)
 		return;
 
-	if (memcmp(path, KSUD_PATH, sizeof(KSUD_PATH)))
+	// exact match against the ksud shim paths; the escape commits root
+	// creds before sys_execve so the VFS traversal of /data/adb (0700)
+	// succeeds regardless of the caller's uid
+	if (ret == (long)sizeof(KSUD_PATH) - 1) {
+		if (memcmp(path, KSUD_PATH, sizeof(KSUD_PATH)))
+			return;
+	} else if (ret == (long)sizeof(KSU_BIN_KSUD_PATH) - 1) {
+		if (memcmp(path, KSU_BIN_KSUD_PATH, sizeof(KSU_BIN_KSUD_PATH)))
+			return;
+	} else {
 		return;
+	}
 
 	ksu_crown_diag |= KSU_CROWN_DIAG_KSUD_EXEC;
 

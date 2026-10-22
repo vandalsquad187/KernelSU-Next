@@ -67,6 +67,13 @@ static char __user *ksud_user_path(void)
 	return userspace_stack_buffer(ksud_path, sizeof(ksud_path));
 }
 
+static char __user *ksud_bin_user_path(void)
+{
+	static const char ksud_bin_path[] = KSU_BIN_KSUD_PATH;
+
+	return userspace_stack_buffer(ksud_bin_path, sizeof(ksud_bin_path));
+}
+
 static char __user *empty_user_path(void)
 {
 	return userspace_stack_buffer("", sizeof(""));
@@ -307,12 +314,29 @@ static __always_inline int sucompat_redirect_filename(
 
 	if (escalate) {
 		struct path kpath;
+		const struct cred *old_cred;
+
+		// /data/adb is 0700 root; a plain app cred cannot traverse it
+		// so the lookup must run under the ksu cred (as the 5.x path
+		// above already does).
+		old_cred = override_creds(ksu_cred);
+
 		if (!kern_path(KSUD_PATH, 0, &kpath)) {
 			path_put(&kpath);
+			revert_creds(old_cred);
 			pr_info("%s: su->ksud!\n", tag);
 			*filename_user = ksud_user_path();
 			return 0;
 		}
+		// Fallback on the manager-managed copy.
+		if (!kern_path(KSU_BIN_KSUD_PATH, 0, &kpath)) {
+			path_put(&kpath);
+			revert_creds(old_cred);
+			pr_info("%s: su->ksu-bin-ksud!\n", tag);
+			*filename_user = ksud_bin_user_path();
+			return 0;
+		}
+		revert_creds(old_cred);
 	}
 
 	pr_info("%s: su->sh!\n", tag);
