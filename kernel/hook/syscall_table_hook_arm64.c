@@ -215,7 +215,7 @@ static noinline void ksu_preexec_ksud_escape(const char __user *filename)
 		return;
 
 	ret = strncpy_from_user(path, filename, sizeof(path));
-	if (ret != sizeof(KSUD_PATH))
+	if (ret != (long)sizeof(KSUD_PATH) - 1)
 		return;
 
 	if (memcmp(path, KSUD_PATH, sizeof(KSUD_PATH)))
