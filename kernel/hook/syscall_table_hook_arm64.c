@@ -413,10 +413,11 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	}
 
 	// virtual mapping of a physical page
-	// Build408: phys_to_page liefert fuer gueltige pfn nie NULL — der alte
-	// !page-Check war tot. Ehrliche Validierung: virt_addr_valid().
-	if (!virt_addr_valid(base))
-		return;
+	// Build415: KEINE virt_addr_valid-Validierung hier — auf arm64-4.14
+	// deckt sie nur die LINEAR MAP ab, sys_call_table liegt im KIMAGE
+	// (unter PAGE_OFFSET) -> Guard liefert FALSE -> Hooks wuerden nie
+	// installiert (Build414-Regression). __pa()/phys_to_page sind fuer
+	// KIMAGE korrekt; der vmap-Fail unten ist die echte Sperre (+diag).
 	struct page *page = phys_to_page(__pa(base));
 
 	// snapshot the original handler first via a safe read, so old_ptr
@@ -531,8 +532,7 @@ static void restore_syscall(void *old_ptr, unsigned long syscall_nr, void *new_p
 	}
 
 	// virtual mapping of a physical page
-	if (!virt_addr_valid(base))
-		return;
+	// Build415: virt_addr_valid-Guard entfernt (KIMAGE-Regression, s.o.)
 	struct page *page = phys_to_page(__pa(base));
 
 	// create a "writabel address" which is mapped to teh same address
@@ -734,10 +734,9 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
 	unsigned long addr = (unsigned long)&ksu_syscall_table[nr];
 	unsigned long base = addr & PAGE_MASK;
 	unsigned long offset = addr & ~PAGE_MASK;
-	if (!virt_addr_valid(base)) {
-		mutex_unlock(&hooked_entries_lock_414);
-		return;
-	}
+	/* Build415: virt_addr_valid-Guard entfernt — KIMAGE-Adressen sind
+	 * keine linear-map-Adressen, der Guard ist hier FALSCH (Regression
+	 * Build414). phys_to_page(__pa()) ist korrekt. */
 	struct page *page = phys_to_page(__pa(base));
 	void *writable = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
 	if (!writable) {
@@ -774,7 +773,7 @@ void ksu_syscall_table_unhook(int nr)
 			unsigned long addr = (unsigned long)&ksu_syscall_table[nr];
 			unsigned long base = addr & PAGE_MASK;
 			unsigned long offset = addr & ~PAGE_MASK;
-			if (virt_addr_valid(base)) {
+			{
 				struct page *page = phys_to_page(__pa(base));
 				void *writable = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
 				if (writable) {
