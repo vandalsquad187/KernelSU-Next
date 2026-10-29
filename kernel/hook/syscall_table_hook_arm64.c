@@ -413,8 +413,9 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	}
 
 	// virtual mapping of a physical page
-	struct page *page = phys_to_page(__pa(base));
-	if (!page)
+	// Build408: phys_to_page liefert fuer gueltige pfn nie NULL — der alte
+	// !page-Check war tot. Ehrliche Validierung: virt_addr_valid().
+	if (!virt_addr_valid(base))
 		return;
 
 	// snapshot the original handler first via a safe read, so old_ptr
@@ -428,8 +429,11 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 
 	// create a "writabel address" which is mapped to teh same address
 	void *writable_addr = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
-	if (!writable_addr)
+	if (!writable_addr) {
+		/* Build408: vmap-Fehler sichtbar machen */
+		ksu_patch_diag_fail |= (1UL << diag_bit);
 		return;
+	}
 
 	// swap on the alias
 	void **target_slot = (void **)((unsigned long)writable_addr + offset);
@@ -525,15 +529,17 @@ static void restore_syscall(void *old_ptr, unsigned long syscall_nr, void *new_p
 		return;
 	}
 
-	// virtual mapping of a physical page 
-	struct page *page = phys_to_page(__pa(base));
-	if (!page)
+	// virtual mapping of a physical page
+	if (!virt_addr_valid(base))
 		return;
 
 	// create a "writabel address" which is mapped to teh same address
 	void *writable_addr = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
-	if (!writable_addr)
+	if (!writable_addr) {
+		/* Build408: vmap-Fehler sichtbar machen */
+		ksu_patch_diag_fail |= (1UL << diag_bit);
 		return;
+	}
 
 	// swap on the alias
 	void **target_slot = (void **)((unsigned long)writable_addr + offset);
@@ -725,13 +731,16 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
 	unsigned long addr = (unsigned long)&ksu_syscall_table[nr];
 	unsigned long base = addr & PAGE_MASK;
 	unsigned long offset = addr & ~PAGE_MASK;
-	struct page *page = phys_to_page(__pa(base));
-	if (!page) {
+	if (!virt_addr_valid(base)) {
 		mutex_unlock(&hooked_entries_lock_414);
 		return;
 	}
+	struct page *page = phys_to_page(__pa(base));
 	void *writable = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
 	if (!writable) {
+		/* Build408: vmap-Fehler sichtbar machen — sonst sind die Hooks
+		 * still halb angewendet. (414-Pfad hat kein diag_bit-Arg → Bit 31) */
+		ksu_patch_diag_fail |= (1UL << 31);
 		mutex_unlock(&hooked_entries_lock_414);
 		return;
 	}
@@ -762,8 +771,8 @@ void ksu_syscall_table_unhook(int nr)
 			unsigned long addr = (unsigned long)&ksu_syscall_table[nr];
 			unsigned long base = addr & PAGE_MASK;
 			unsigned long offset = addr & ~PAGE_MASK;
-			struct page *page = phys_to_page(__pa(base));
-			if (page) {
+			if (virt_addr_valid(base)) {
+				struct page *page = phys_to_page(__pa(base));
 				void *writable = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
 				if (writable) {
 					syscall_fn_t *slot = (syscall_fn_t *)((unsigned long)writable + offset);

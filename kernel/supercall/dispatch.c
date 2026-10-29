@@ -91,7 +91,7 @@ static int do_get_info(void __user *arg)
     cmd.features = KSU_FEATURE_MAX;
     cmd.uapi_version = KERNEL_SU_UAPI_VERSION;
 
-    pr_info("ksu GET_INFO: version=%u uapi=%u flags=0x%x from uid=%d pid=%d\n",
+    pr_info_ratelimited("ksu GET_INFO: version=%u uapi=%u flags=0x%x from uid=%d pid=%d\n",
         cmd.version, cmd.uapi_version, cmd.flags, current_uid().val, current->pid);
 
     if (copy_to_user(arg, &cmd, sizeof(cmd))) {
@@ -236,6 +236,9 @@ static int do_check_safemode(void __user *arg)
     return 0;
 }
 
+#define KSU_MAX_ALLOWLIST_COUNT 1024
+#define KSU_MAX_UMOUNT_LIST 64
+
 static int do_new_get_allow_list_common(void __user *arg, bool allow)
 {
     struct ksu_new_get_allow_list_cmd cmd;
@@ -247,6 +250,10 @@ static int do_new_get_allow_list_common(void __user *arg, bool allow)
     }
 
     if (cmd.count) {
+        /* Build408: userspace kontrolliert count — Obergrenze gegen
+         * oversize-kmalloc (wie lookup_symbols). */
+        if (cmd.count > KSU_MAX_ALLOWLIST_COUNT)
+            return -EINVAL;
         arr = kmalloc(sizeof(int) * cmd.count, GFP_KERNEL);
         if (!arr) {
             return -ENOMEM;
@@ -608,6 +615,9 @@ static int add_try_umount(void __user *arg)
             return -EFAULT;
 
         buf[sizeof(buf) - 1] = '\0';
+        /* Build408: gestutzte Pfade sichtbar machen statt still kuerzen */
+        if (len >= (long)sizeof(buf) - 1)
+            pr_warn_ratelimited("ksu umount: path truncated to %zu chars\n", sizeof(buf) - 1);
 
         new_entry = kzalloc(sizeof(*new_entry), GFP_KERNEL);
         if (!new_entry)
@@ -621,15 +631,25 @@ static int add_try_umount(void __user *arg)
 
         down_write(&mount_list_lock);
 
-        // disallow dupes
-        // if this gets too many, we can consider moving this whole task to a kthread
-        list_for_each_entry (entry, &mount_list, list) {
-            if (!strcmp(entry->umountable, buf)) {
-                pr_info("cmd_add_try_umount: %s is already here!\n", buf);
+        // disallow dupes + Obergrenze (Build408): wilde Listenlaenge von
+        // root-Prozessen soll nicht unbegrenzt wachsen
+        {
+            int cnt = 0;
+            list_for_each_entry (entry, &mount_list, list) {
+                cnt++;
+                if (!strcmp(entry->umountable, buf)) {
+                    pr_info_ratelimited("cmd_add_try_umount: %s is already here!\n", buf);
+                    up_write(&mount_list_lock);
+                    kfree(new_entry->umountable);
+                    kfree(new_entry);
+                    return -EEXIST;
+                }
+            }
+            if (cnt >= KSU_MAX_UMOUNT_LIST) {
                 up_write(&mount_list_lock);
                 kfree(new_entry->umountable);
                 kfree(new_entry);
-                return -EEXIST;
+                return -ENOSPC;
             }
         }
 
@@ -1101,7 +1121,7 @@ long ksu_supercall_handle_ioctl(const struct file *filp, unsigned int cmd, void 
             // Check permission first
             if (ksu_ioctl_handlers[i].perm_check && !ksu_ioctl_handlers[i].perm_check() &&
                 !(ksu_ioctl_handlers[i].allow_su_session && ksu_is_su_session_fd(filp))) {
-                pr_warn("ksu ioctl: permission denied for cmd=0x%x uid=%d\n", cmd, current_uid().val);
+                pr_warn_ratelimited("ksu ioctl: permission denied for cmd=0x%x uid=%d\n", cmd, current_uid().val);
                 return -EPERM;
             }
             // Execute handler
@@ -1109,19 +1129,7 @@ long ksu_supercall_handle_ioctl(const struct file *filp, unsigned int cmd, void 
         }
     }
 
-	for (i = 0; ksu_ioctl_handlers[i].handler; i++) {
-		if (cmd == ksu_ioctl_handlers[i].cmd) {
-			// Check permission first
-			if (ksu_ioctl_handlers[i].perm_check && !ksu_ioctl_handlers[i].perm_check()) {
-				pr_warn("ksu ioctl: permission denied for cmd=0x%x uid=%d\n", cmd, current_uid().val);
-				return -EPERM;
-			}
-			// Execute handler
-			return ksu_ioctl_handlers[i].handler(argp);
-		}
-	}
-
-    pr_warn("ksu ioctl: unsupported command 0x%x uid=%d\n", cmd, current_uid().val);
+    pr_warn_ratelimited("ksu ioctl: unsupported command 0x%x uid=%d\n", cmd, current_uid().val);
     return -ENOTTY;
 }
 

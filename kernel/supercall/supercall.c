@@ -525,13 +525,15 @@ static int ksu_handle_fd_request(void __user *arg4)
 }
 
 // downstream: make sure to pass arg as reference, this can allow us to extend things.
+static unsigned long last_throne_jiffies;
+
 int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
 {
 
 	if (magic1 != KSU_INSTALL_MAGIC1)
 		return 0;
 #ifdef CONFIG_KSU_DEBUG
-	pr_info("sys_reboot: intercepted call! magic: 0x%x id: %d\n", magic1,
+	pr_info_ratelimited("sys_reboot: intercepted call! magic: 0x%x id: %d\n", magic1,
 		magic2);
 #endif
 
@@ -617,7 +619,7 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
         return 0;
     }
 #endif // #ifdef CONFIG_KSU_SUSFS
-	pr_info("sys_reboot: intercepted call! magic: 0x%x id: %d\n", magic1, magic2);
+	pr_info_ratelimited("sys_reboot: intercepted call! magic: 0x%x id: %d\n", magic1, magic2);
 
 	// arg4 = (unsigned long)PT_REGS_SYSCALL_PARM4(real_regs);
 	// downstream: dereference arg as arg4 so we can be inline to upstream
@@ -626,14 +628,18 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
 	// Check if this is a request to install KSU fd
 	if (magic2 == KSU_INSTALL_MAGIC2) {
 		// Trigger throne_tracker on first FD request (after /data is mounted)
-		if (!ksu_is_manager_appid_valid()) {
-			pr_info("sys_reboot: manager not yet detected, running track_throne_now\n");
+		// Build408: max 1/s — jeder uid-0-Prozess (und jede App) kann das
+		// ueber sys_reboot ausloesen, ohne Gate wuerde es auf Dauerlauf spammen.
+		if (!ksu_is_manager_appid_valid() &&
+		    time_after(jiffies, READ_ONCE(last_throne_jiffies) + HZ)) {
+			WRITE_ONCE(last_throne_jiffies, jiffies);
+			pr_info_ratelimited("sys_reboot: manager not yet detected, running track_throne_now\n");
 			track_throne_now(false);
 			if (ksu_is_manager_appid_valid())
 				pr_info("sys_reboot: manager detected! appid=%d\n",
 					ksu_get_manager_appid());
 			else
-				pr_info("sys_reboot: manager still not detected\n");
+				pr_info_ratelimited("sys_reboot: manager still not detected\n");
 		}
 		return ksu_handle_fd_request(arg4);
 	}
