@@ -417,6 +417,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	// !page-Check war tot. Ehrliche Validierung: virt_addr_valid().
 	if (!virt_addr_valid(base))
 		return;
+	struct page *page = phys_to_page(__pa(base));
 
 	// snapshot the original handler first via a safe read, so old_ptr
 	// is valid even when the verify below forces a retry
@@ -532,12 +533,14 @@ static void restore_syscall(void *old_ptr, unsigned long syscall_nr, void *new_p
 	// virtual mapping of a physical page
 	if (!virt_addr_valid(base))
 		return;
+	struct page *page = phys_to_page(__pa(base));
 
 	// create a "writabel address" which is mapped to teh same address
 	void *writable_addr = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
 	if (!writable_addr) {
-		/* Build408: vmap-Fehler sichtbar machen */
-		ksu_patch_diag_fail |= (1UL << diag_bit);
+		/* Build408: vmap-Fehler sichtbar machen (dieser Pfad hat kein
+		 * diag_bit-Arg → Bit 30) */
+		ksu_patch_diag_fail |= (1UL << 30);
 		return;
 	}
 
