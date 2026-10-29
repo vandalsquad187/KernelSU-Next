@@ -5,6 +5,7 @@
 #include <linux/fs.h>
 #include <linux/kprobes.h>
 #include <linux/pid.h>
+#include <linux/ratelimit.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
 #include <linux/task_work.h>

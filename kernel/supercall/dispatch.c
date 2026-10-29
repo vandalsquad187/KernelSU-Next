@@ -7,6 +7,7 @@
 #include <linux/mutex.h>
 #include <linux/namei.h>
 #include <linux/printk.h>
+#include <linux/ratelimit.h>
 #include <linux/sched.h>
 #include <linux/sched/task.h>
 #include <linux/slab.h>
