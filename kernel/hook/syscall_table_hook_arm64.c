@@ -19,12 +19,16 @@
 #include "policy/app_profile.h"
 #include "ksu.h"
 #include "kernel_compat.h"
+#include <linux/atomic.h>
 #include "klog.h" // IWYU pragma: keep
 
 /* Diagnose-Bitmasken werden von beliebigen Tasks geschrieben (execve/prctl-Pfade):
- * atomares OR, damit gleichzeitige Updates keine Bits verlieren. */
+ * atomares OR, damit gleichzeitige Updates keine Bits verlieren.
+ * Build417: Kernel-eigenes atomic_or statt __atomic_fetch_or — der alte
+ * Cross-GCC emittiert fuer __atomic_* out-of-line-Helper (__aarch64_ldset4_relax),
+ * die im Kernel nicht gelinkt sind. atomic_or kompiliert inline (LL/SC bzw. LSE). */
 #define KSU_DIAG_SET(var, mask) \
-	((void)__atomic_fetch_or(&(var), (uint32_t)(mask), __ATOMIC_RELAXED))
+	((void)atomic_or((int)(uint32_t)(mask), (atomic_t *)&(var)))
 
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/include/uapi/asm-generic/unistd.h
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/arch/arm64/include/asm/unistd32.h
