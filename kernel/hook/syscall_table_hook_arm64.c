@@ -21,6 +21,11 @@
 #include "kernel_compat.h"
 #include "klog.h" // IWYU pragma: keep
 
+/* Diagnose-Bitmasken werden von beliebigen Tasks geschrieben (execve/prctl-Pfade):
+ * atomares OR, damit gleichzeitige Updates keine Bits verlieren. */
+#define KSU_DIAG_SET(var, mask) \
+	((void)__atomic_fetch_or(&(var), (uint32_t)(mask), __ATOMIC_RELAXED))
+
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/include/uapi/asm-generic/unistd.h
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/arch/arm64/include/asm/unistd32.h
 // ref: https://elixir.bootlin.com/linux/v4.14.1/source/arch/arm64/include/asm/unistd.h
@@ -231,15 +236,15 @@ static noinline void ksu_preexec_ksud_escape(const char __user *filename)
 		return;
 	}
 
-	ksu_crown_diag |= KSU_CROWN_DIAG_KSUD_EXEC;
+	KSU_DIAG_SET(ksu_crown_diag, KSU_CROWN_DIAG_KSUD_EXEC);
 
 	if (!ksu_is_allow_uid_for_current(current_uid().val))
 		return;
 
 	escape_with_root_profile()
-	    ? (ksu_crown_diag |= KSU_CROWN_DIAG_ESCAPE_FAIL)
-	    : (ksu_crown_diag |= KSU_CROWN_DIAG_ESCAPE_RET0);
-	ksu_crown_diag |= KSU_CROWN_DIAG_KSUD_ESCAPE;
+	    ? KSU_DIAG_SET(ksu_crown_diag, KSU_CROWN_DIAG_ESCAPE_FAIL)
+	    : KSU_DIAG_SET(ksu_crown_diag, KSU_CROWN_DIAG_ESCAPE_RET0);
+	KSU_DIAG_SET(ksu_crown_diag, KSU_CROWN_DIAG_KSUD_ESCAPE);
 }
 
 static noinline long hook_aarch64_execve(const char __user * filename,
@@ -382,7 +387,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	void **syscall_slot_addr = &sctable[syscall_nr];
 
 	if (!*syscall_slot_addr) {
-		ksu_patch_diag_fail |= (1UL << diag_bit);
+		KSU_DIAG_SET(ksu_patch_diag_fail, (1UL << diag_bit));
 		return;
 	}
 
@@ -408,7 +413,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	// BUG_ON(offset + len > PAGE_SIZE);
 	if (offset + sizeof(void *) > PAGE_SIZE) {
 		pr_info("%s: syscall slot crosses page boundary! aborting.\n", __func__);
-		ksu_patch_diag_fail |= (1UL << diag_bit);
+		KSU_DIAG_SET(ksu_patch_diag_fail, (1UL << diag_bit));
 		return;
 	}
 
@@ -425,7 +430,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	void *orig = NULL, *verify = NULL;
 	if (copy_from_kernel_nofault(&orig, syscall_slot_addr, sizeof(void *)) || !orig) {
 		pr_err("%s: syscall #%d snapshot read failed, aborting patch\n", __func__, syscall_nr);
-		ksu_patch_diag_fail |= (1UL << diag_bit);
+		KSU_DIAG_SET(ksu_patch_diag_fail, (1UL << diag_bit));
 		return;
 	}
 
@@ -433,7 +438,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 	void *writable_addr = vmap(&page, 1, VM_MAP, PAGE_KERNEL);
 	if (!writable_addr) {
 		/* Build408: vmap-Fehler sichtbar machen */
-		ksu_patch_diag_fail |= (1UL << diag_bit);
+		KSU_DIAG_SET(ksu_patch_diag_fail, (1UL << diag_bit));
 		return;
 	}
 
@@ -464,7 +469,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 			verify = NULL;
 			if (!copy_from_kernel_nofault(&verify, syscall_slot_addr, sizeof(void *))) {
 				if (verify == new_ptr) {
-					ksu_patch_diag_ok |= (1UL << diag_bit);
+					KSU_DIAG_SET(ksu_patch_diag_ok, (1UL << diag_bit));
 					return;
 				}
 			}
@@ -485,7 +490,7 @@ static void read_and_replace_syscall(void *old_ptr, unsigned long syscall_nr, vo
 		}
 		pr_err("%s: syscall #%d patch verify FAILED (slot 0x%lx reads 0x%lx, expected 0x%lx)\n",
 		       __func__, syscall_nr, (long)syscall_slot_addr, (long)verify, (long)new_ptr);
-		ksu_patch_diag_fail |= (1UL << diag_bit);
+		KSU_DIAG_SET(ksu_patch_diag_fail, (1UL << diag_bit));
 	}
 
 	smp_mb();
@@ -540,7 +545,7 @@ static void restore_syscall(void *old_ptr, unsigned long syscall_nr, void *new_p
 	if (!writable_addr) {
 		/* Build408: vmap-Fehler sichtbar machen (dieser Pfad hat kein
 		 * diag_bit-Arg → Bit 30) */
-		ksu_patch_diag_fail |= (1UL << 30);
+		KSU_DIAG_SET(ksu_patch_diag_fail, (1UL << 30));
 		return;
 	}
 
@@ -742,7 +747,7 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
 	if (!writable) {
 		/* Build408: vmap-Fehler sichtbar machen — sonst sind die Hooks
 		 * still halb angewendet. (414-Pfad hat kein diag_bit-Arg → Bit 31) */
-		ksu_patch_diag_fail |= (1UL << 31);
+		KSU_DIAG_SET(ksu_patch_diag_fail, (1UL << 31));
 		mutex_unlock(&hooked_entries_lock_414);
 		return;
 	}

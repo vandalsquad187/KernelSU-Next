@@ -87,7 +87,7 @@ static bool manager_has_fd(struct task_struct *task)
 	fdt = files_fdtable(task->files);
 	if (!fdt)
 		goto out;
-	for (fd_idx = 0; fd_idx <= fdt->max_fds; fd_idx++) {
+	for (fd_idx = 0; fd_idx < fdt->max_fds; fd_idx++) {
 		f = fcheck_files(task->files, fd_idx);
 		if (f && f->f_op && f->f_op == &anon_ksu_fops) {
 			found = true;
@@ -255,7 +255,7 @@ long ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 		rcu_read_lock();
 		fdt = files_fdtable(current->files);
 		if (fdt) {
-			for (fd_idx = 0; fd_idx <= fdt->max_fds; fd_idx++) {
+			for (fd_idx = 0; fd_idx < fdt->max_fds; fd_idx++) {
 				f = fcheck_files(current->files, fd_idx);
 				if (f && f->f_op && f->f_op == &anon_ksu_fops) {
 					has_fd = true;
