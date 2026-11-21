@@ -605,6 +605,12 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
             return 0;
         }
 #endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP
+#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
+        if (cmd == CMD_SUSFS_SET_PRIORITY_UID_FILTER) {
+            susfs_set_priority_uid_filter(arg);
+            return 0;
+        }
+#endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
         if (cmd == CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING) {
             susfs_set_avc_log_spoofing(arg);
             return 0;

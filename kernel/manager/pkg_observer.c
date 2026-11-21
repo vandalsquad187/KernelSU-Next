@@ -16,6 +16,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/version.h>
+#include <linux/susfs.h>
 #include "manager/throne_tracker.h"
 #include "klog.h" // IWYU pragma: keep
 
@@ -51,6 +52,9 @@ static noinline void ksu_rename_observer_slow(struct dentry *old_dentry, struct 
 
 	pr_info("renameat: %s -> %s, new path: %s\n", old_dentry->d_iname, new_dentry->d_iname, buf);
 	track_throne(false);
+#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
+	susfs_parse_priority_app_strings();
+#endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
 	return;
 }
 
@@ -98,6 +102,9 @@ static inline void ksu_rename_observer(struct dentry *old_dentry, struct dentry 
 
 	pr_info("renameat: %s -> %s, /data/system d_inode: 0x%lx \n", old_dentry->d_iname, new_dentry->d_iname, system_dir_inode_ptr);
 	track_throne(false);
+#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
+	susfs_parse_priority_app_strings();
+#endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
 	return;
 
 slow_path:
