@@ -7,6 +7,7 @@
 #include "selinux/selinux.h"
 #include "infra/btf_parser.h"
 #include "klog.h"
+#include "../kernel_compat.h"
 
 #if defined(MODULE) && defined(CONFIG_DEBUG_INFO_BTF)
 #include <uapi/linux/btf.h>
