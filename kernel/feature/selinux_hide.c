@@ -18,6 +18,8 @@
 #include <net/genetlink.h>
 #include <linux/moduleparam.h>
 #include <linux/mutex.h>
+#include <linux/security.h>
+#include <linux/xattr.h>
 // security/selinux/include/security.h
 #include <security.h>
 #include <ss/context.h>

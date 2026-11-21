@@ -15,6 +15,7 @@
 #include <linux/types.h>
 #include <linux/kallsyms.h>
 #include <linux/mm.h>
+#include <linux/ratelimit.h>
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -1108,7 +1109,7 @@ long ksu_supercall_handle_ioctl(const struct file *filp, unsigned int cmd, void 
     int i;
 
 #ifdef CONFIG_KSU_DEBUG
-    pr_info("ksu ioctl: cmd=0x%x from uid=%d\n", cmd, current_uid().val);
+    pr_info_ratelimited("ksu ioctl: cmd=0x%x from uid=%d\n", cmd, current_uid().val);
 #endif
 
 	/* Always log GET_INFO to diagnose "kernel update required" issues */

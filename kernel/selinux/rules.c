@@ -42,17 +42,17 @@ extern int avc_ss_reset(u32 seqno);
 extern int avc_ss_reset(struct selinux_avc *avc, u32 seqno);
 #endif
 // reset avc cache table, otherwise the new rules will not take effect if already denied
-static void reset_avc_cache()
+static void reset_avc_cache(u32 seqno)
 {
 #if ((!defined(KSU_COMPAT_USE_SELINUX_STATE)) || LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0))
-	avc_ss_reset(0);
-	selnl_notify_policyload(0);
-	selinux_status_update_policyload(0);
+	avc_ss_reset(seqno);
+	selnl_notify_policyload(seqno);
+	selinux_status_update_policyload(seqno);
 #else
 	struct selinux_avc *avc = selinux_state.avc;
-	avc_ss_reset(avc, 0);
-	selnl_notify_policyload(0);
-	selinux_status_update_policyload(&selinux_state, 0);
+	avc_ss_reset(avc, seqno);
+	selnl_notify_policyload(seqno);
+	selinux_status_update_policyload(&selinux_state, seqno);
 #endif
 	selinux_xfrm_notify_policyload();
 }
@@ -185,7 +185,7 @@ void apply_kernelsu_rules()
 	synchronize_rcu();
 	ksu_destroy_sepolicy(old_pol);
 
-	reset_avc_cache();
+	reset_avc_cache(0);
 out_unlock:
 	mutex_unlock(&selinux_state.policy_mutex);
 #else
@@ -223,7 +223,7 @@ do_stop_machine:
 
 out_flush:
 	smp_mb();
-	reset_avc_cache();
+	reset_avc_cache(0);
 #endif
 }
 
@@ -584,7 +584,7 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
 	synchronize_rcu();
 	ksu_destroy_sepolicy(old_pol);
 
-	reset_avc_cache();
+	reset_avc_cache(0);
 	ret = success_cmd_count;
 	goto out_unlock;
 
@@ -720,7 +720,7 @@ out_done:
 		goto out_free;
 
 	smp_mb();
-	reset_avc_cache();
+	reset_avc_cache(0);
 	ret = success_cmd_count;
 
 out_free:

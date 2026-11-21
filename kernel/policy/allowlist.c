@@ -601,14 +601,12 @@ void ksu_load_allow_list()
 		pr_info("load_allow_uid, name: %s, uid: %d, allow: %d\n", profile.key, profile.curr_uid, profile.allow_su);
 		ksu_set_app_profile(&profile);
 	}
-	ksu_show_allow_list();
 	filp_close(fp, 0);
 	if (version < KSU_APP_PROFILE_VER)
 		ksu_persistent_allow_list();
 	return;
 
 exit:
-	ksu_show_allow_list();
 	filp_close(fp, 0);
 }
 
@@ -633,7 +631,6 @@ void ksu_prune_allowlist(bool (*is_uid_valid)(uid_t, char *, void *),
         bool is_preserved_uid = uid == KSU_APP_PROFILE_PRESERVE_UID || uid == WEBVIEW_ZYGOTE_UID;
         if (!is_preserved_uid && !is_uid_valid(uid, package, data)) {
             modified = true;
-            pr_info("prune uid: %d, package: %s\n", uid, package);
             hlist_del_rcu(&np->list);
             put_perm_data(np);
             --allow_list_count;
