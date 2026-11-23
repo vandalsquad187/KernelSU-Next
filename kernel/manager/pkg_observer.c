@@ -115,10 +115,31 @@ slow_path:
 // 4.14 split build: manager_observer TU never existed (unity era callers in
 // core/init.c/boot_event.c expect these symbols; rename observation lives here)
 #include "manager/manager_observer.h"
-int ksu_observer_init(void)
+#include "susfs/lsm_hook.h"
+
+static int ksu_rename_observer_lsm(struct inode *old_dir, struct dentry *old_dentry,
+				   struct inode *new_dir, struct dentry *new_dentry)
 {
+	ksu_rename_observer(old_dentry, new_dentry);
 	return 0;
 }
+
+static struct ksu_lsm_hook ksu_pkg_rename_hook =
+	KSU_LSM_HOOK_INSERT(inode_rename, (void *)ksu_rename_observer_lsm);
+
+int ksu_observer_init(void)
+{
+	int rc = ksu_register_lsm_hook(&ksu_pkg_rename_hook);
+
+	if (rc)
+		pr_err("renameat: observer inode_rename hook failed %d - packages.list renew dead\n", rc);
+	else
+		pr_info("renameat: observer inode_rename hook inserted (node %px)\n",
+			(void *)ksu_pkg_rename_hook.entry);
+	return rc;
+}
+
 void ksu_observer_exit(void)
 {
+	ksu_unregister_lsm_hook(&ksu_pkg_rename_hook);
 }
