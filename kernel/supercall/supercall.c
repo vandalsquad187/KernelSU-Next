@@ -554,6 +554,10 @@ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user 
             susfs_del_sus_path(arg);
             return 0;
         }
+        if (cmd == CMD_SUSFS_SET_SUS_PATH_UID_FILTER) {
+            susfs_set_sus_path_uid_filter(arg);
+            return 0;
+        }
 #endif //#ifdef CONFIG_KSU_SUSFS_SUS_PATH
 #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
         if (cmd == CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS) {

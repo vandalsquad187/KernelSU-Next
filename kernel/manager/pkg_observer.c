@@ -55,6 +55,9 @@ static noinline void ksu_rename_observer_slow(struct dentry *old_dentry, struct 
 #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
 	susfs_parse_priority_app_strings();
 #endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	susfs_parse_sus_path_app_strings();
+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 	return;
 }
 
@@ -105,6 +108,9 @@ static inline void ksu_rename_observer(struct dentry *old_dentry, struct dentry 
 #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
 	susfs_parse_priority_app_strings();
 #endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	susfs_parse_sus_path_app_strings();
+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 	return;
 
 slow_path:
