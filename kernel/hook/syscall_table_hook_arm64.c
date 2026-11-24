@@ -42,6 +42,10 @@
 #define __AARCH64_read		63
 #define __AARCH64_prctl		167
 
+#ifndef KSU_INSTALL_MAGIC1
+#define KSU_INSTALL_MAGIC1 0xDEADBEEF
+#endif
+
 // NOTE: CONFIG_COMPAT implies __ARCH_WANT_COMPAT_STAT64 (fstatat64, fstat64)
 #define __ARMEABI_reboot	88
 #define __ARMEABI_execve	11
@@ -64,7 +68,8 @@ static noinline long hook_aarch64_reboot(const struct pt_regs *regs)
 	unsigned int cmd = (unsigned int)regs->regs[2];
 	void __user **arg = (void __user **)&regs->regs[3];
 
-	ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
+	if (magic1 == KSU_INSTALL_MAGIC1)
+		return ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
 	return aarch64_reboot(regs);
 }
 
@@ -142,7 +147,8 @@ static noinline long hook_armeabi_reboot(const struct pt_regs *regs)
 	unsigned int cmd = (unsigned int)regs->regs[2];
 	void __user **arg = (void __user **)&regs->regs[3];
 
-	ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
+	if (magic1 == KSU_INSTALL_MAGIC1)
+		return ksu_handle_sys_reboot(magic1, magic2, cmd, arg);
 	return armeabi_reboot(regs);
 }
 
@@ -209,7 +215,8 @@ static noinline long hook_armeabi_read(const struct pt_regs *regs)
 static uintptr_t aarch64_reboot __read_mostly = NULL;
 static noinline long hook_aarch64_reboot(int magic1, int magic2, unsigned int cmd, void __user *arg)
 {
-	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
+	if (magic1 == KSU_INSTALL_MAGIC1)
+		return ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
 	return sys_reboot(magic1, magic2, cmd, arg);
 }
 
@@ -314,7 +321,8 @@ extern const void *compat_sys_call_table[];
 static uintptr_t armeabi_reboot __read_mostly = NULL;
 static noinline long hook_armeabi_reboot(int magic1, int magic2, unsigned int cmd, void __user *arg)
 {
-	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
+	if (magic1 == KSU_INSTALL_MAGIC1)
+		return ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
 	return sys_reboot(magic1, magic2, cmd, arg);
 }
 
